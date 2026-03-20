@@ -13,6 +13,9 @@ out/
 # build artifacts
 tsconfig.tsbuildinfo
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # misc
 .DS_Store
 *.pem
