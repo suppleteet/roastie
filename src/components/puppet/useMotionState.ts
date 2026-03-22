@@ -14,18 +14,14 @@ export function useMotionState(targets: React.MutableRefObject<SpringTargets>) {
   const stiffnessRef = useRef(40);
   const dampingRef = useRef(10);
   const timeRef = useRef(0);
-  const awakeRef = useRef(false); // latches true on first audible audio, resets when not roasting
 
   useFrame((_, delta) => {
     timeRef.current += delta;
     const t = timeRef.current;
-    const { activeMotionState, motionIntensity, audioAmplitude, phase } =
+    const { activeMotionState, motionIntensity, audioAmplitude, hasSpokenThisSession } =
       useSessionStore.getState();
 
-    // Latch awake on first audible audio; reset when phase leaves roasting
-    if (phase !== "roasting") awakeRef.current = false;
-    if (phase === "roasting" && audioAmplitude > 0.03) awakeRef.current = true;
-    const awake = awakeRef.current;
+    const awake = hasSpokenThisSession;
     const effectiveState: MotionState = awake ? activeMotionState : "sleeping";
     const effectiveIntensity = awake ? motionIntensity : 1.0;
 
