@@ -44,6 +44,7 @@ export class ComedianBrainDriver extends LiveSessionMock {
   override async setup(): Promise<void> {
     await super.setup();
     await this._mockGenerateJokeRoute();
+    await this._mockGenerateSpeakRoute();
     await this._injectSpeedConfig();
   }
 
@@ -79,6 +80,41 @@ export class ComedianBrainDriver extends LiveSessionMock {
           jokes: [{ text: "Test joke.", motion: "smug", intensity: 0.7, score: 6 }],
           ...response,
         }),
+      });
+    });
+  }
+
+  private async _mockGenerateSpeakRoute(): Promise<void> {
+    await this.page.route("/api/generate-speak", async (route) => {
+      const body = route.request().postDataJSON() as JokeApiRequest;
+      this.jokeRequests.push(body);
+
+      const response = this.jokeResponseQueue.shift() ?? this.defaultJokeResponse;
+      const full = {
+        relevant: true,
+        jokes: [{ text: "Test joke.", motion: "smug", intensity: 0.7, score: 6 }],
+        ...response,
+      };
+
+      // Build SSE body
+      const parts: string[] = [];
+      if (full.relevant) {
+        for (const joke of full.jokes ?? []) {
+          parts.push(`data: ${JSON.stringify({ type: "joke", ...joke })}\n\n`);
+        }
+      }
+      const meta: Record<string, unknown> = { type: "meta", relevant: full.relevant ?? true };
+      if (full.followUp) meta.followUp = full.followUp;
+      if (full.redirect) meta.redirect = full.redirect;
+      if (full.tags) meta.tags = full.tags;
+      if (full.callback) meta.callback = full.callback;
+      parts.push(`data: ${JSON.stringify(meta)}\n\n`);
+      parts.push(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: parts.join(""),
       });
     });
   }

@@ -593,27 +593,99 @@ export class ComedianBrain {
     q: ComedyQuestion | null,
     conversationSoFar: string[],
   ): void {
-    // Check hopper for a relevant scored joke first
-    const hopperJoke = this._popHopperJoke(4);
-    if (hopperJoke) {
-      this.enterDelivering(answer, {
-        relevant: true,
-        jokes: [hopperJoke],
-        tags: [],
-      });
-      return;
-    }
+    let jokesQueued = 0;
+    let metaHandled = false;
 
-    this._generateJoke({
-      context: "answer_roast",
-      question: q?.question,
-      userAnswer: answer,
-      conversationSoFar,
-      imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
-    }).then((response) => {
-      if (this.state !== "generating") return;
-      this.enterDelivering(answer, response ?? { relevant: true, jokes: [] });
-    });
+    this._generateJokeStream(
+      {
+        context: "answer_roast",
+        question: q?.question,
+        userAnswer: answer,
+        conversationSoFar,
+        imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
+      },
+      // onJoke — fires immediately as each joke streams in
+      (joke) => {
+        if (this.state !== "generating" && this.state !== "delivering") return;
+        if (this.state === "generating") {
+          // First joke arrived — transition to delivering now
+          this._transition("delivering");
+          this.deps.setMotion("energetic", 0.8);
+        }
+        this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
+        this._addLedger("joke", joke.text, []);
+        jokesQueued++;
+      },
+      // onMeta — fires after all jokes stream, with follow-up/redirect/tags/callback
+      (meta) => {
+        if (this.state !== "generating" && this.state !== "delivering") return;
+        metaHandled = true;
+
+        if (!meta.relevant && meta.redirect) {
+          // Irrelevant answer — cancel anything queued and redirect
+          this.deps.cancelSpeech();
+          this._transition("delivering");
+          this.deps.queueSpeak(meta.redirect, "smug", 0.7);
+          this._addLedger("joke", meta.redirect, []);
+          this._transition("redirecting");
+          return;
+        }
+
+        // Ensure we're in delivering state (no jokes may have arrived if API was fast)
+        if (this.state === "generating") {
+          this._transition("delivering");
+          this.deps.setMotion("energetic", 0.8);
+        }
+
+        if (meta.followUp) this.pendingFollowUp = meta.followUp;
+        if (meta.tags?.length) this._addLedger("answer", answer, meta.tags);
+
+        if (meta.callback) {
+          this.deps.queueSpeak(
+            meta.callback.text,
+            meta.callback.motion as import("@/lib/motionStates").MotionState,
+            meta.callback.intensity,
+          );
+          this._addLedger("joke", meta.callback.text, []);
+          jokesQueued++;
+        }
+
+        // Bonus hopper joke (every other delivery to avoid overuse)
+        if (this.transitionCount % 2 === 0) {
+          const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
+          if (bonus) {
+            this.deps.queueSpeak("Oh wait, one more thing—", "emphasis", 0.7);
+            this.deps.queueSpeak(bonus.text, bonus.motion, bonus.intensity);
+            this._addLedger("joke", bonus.text, []);
+            jokesQueued += 2;
+          }
+        }
+
+        if (jokesQueued === 0) {
+          this.deps.logTiming("brain: stream delivered nothing — advancing");
+          this._onDeliveringDrained();
+          return;
+        }
+
+        this._fireHopperGeneration("answer", undefined, answer);
+      },
+      // onError — stream failed, fall back to non-streaming
+      () => {
+        if (metaHandled) return;
+        if (this.state !== "generating") return;
+        this.deps.logTiming("brain: stream failed, generating fresh");
+        this._generateJoke({
+          context: "answer_roast",
+          question: q?.question,
+          userAnswer: answer,
+          conversationSoFar,
+          imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
+        }).then((response) => {
+          if (this.state !== "generating") return;
+          this.enterDelivering(answer, response ?? { relevant: true, jokes: [] });
+        });
+      },
+    );
   }
 
   private enterDelivering(answer: string, response: JokeResponse): void {
@@ -654,13 +726,15 @@ export class ComedianBrain {
       queued++;
     }
 
-    // Check for high-score bonus from hopper
-    const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
-    if (bonus) {
-      this.deps.queueSpeak("Oh wait, one more thing—", "emphasis", 0.7);
-      this.deps.queueSpeak(bonus.text, bonus.motion, bonus.intensity);
-      this._addLedger("joke", bonus.text, []);
-      queued += 2;
+    // Check for high-score bonus from hopper — only every other delivery to avoid overuse
+    if (this.transitionCount % 2 === 0) {
+      const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
+      if (bonus) {
+        this.deps.queueSpeak("Oh wait, one more thing—", "emphasis", 0.7);
+        this.deps.queueSpeak(bonus.text, bonus.motion, bonus.intensity);
+        this._addLedger("joke", bonus.text, []);
+        queued += 2;
+      }
     }
 
     // Nothing was queued — advance immediately (don't wait for TTS drain that will never come)
@@ -693,6 +767,8 @@ export class ComedianBrain {
 
     if (this.cameraAvailable && current.length > 0) {
       const { isInteresting, changes } = diffObservations(this.previousObservations, current);
+      // Always update baseline — prevents diff accumulation from wording variation
+      this.previousObservations = [...current];
       if (isInteresting) {
         this.enterVisionReact(changes, current);
         return;
@@ -714,7 +790,7 @@ export class ComedianBrain {
     if (hopperJoke) {
       this.deps.queueSpeak(hopperJoke.text, hopperJoke.motion, hopperJoke.intensity);
       this._addLedger("joke", hopperJoke.text, []);
-      this.previousObservations = [...currentObs];
+      // previousObservations already updated in enterCheckVision
       return;
     }
 
@@ -727,7 +803,6 @@ export class ComedianBrain {
       if (this.state !== "vision_react") return;
       if (!response || response.jokes.length === 0) {
         // No jokes — fall through to next question rather than getting stuck
-        this.previousObservations = [...currentObs];
         this._transition("ask_question");
         this.enterAskQuestion();
         return;
@@ -736,7 +811,6 @@ export class ComedianBrain {
         this.deps.queueSpeak(joke.text, joke.motion, joke.intensity);
         this._addLedger("joke", joke.text, []);
       }
-      this.previousObservations = [...currentObs];
     });
   }
 
@@ -913,6 +987,88 @@ export class ComedianBrain {
       "What do you do for a living?": "I'd ask what you do but you're not exactly forthcoming. I'll use my imagination.",
     };
     return rhetoricals[question] ?? `I'd ask you ${question.toLowerCase()} but I'll just have to guess.`;
+  }
+
+  private _generateJokeStream(
+    params: {
+      context: "answer_roast";
+      question?: string;
+      userAnswer?: string;
+      conversationSoFar?: string[];
+      imageBase64?: string;
+    },
+    onJoke: (joke: JokeItem) => void,
+    onMeta: (meta: {
+      relevant: boolean;
+      followUp?: string;
+      redirect?: string;
+      tags?: string[];
+      callback?: { text: string; motion: string; intensity: number };
+    }) => void,
+    onError: () => void,
+  ): void {
+    fetch("/api/generate-speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...params,
+        persona: this.deps.getPersona(),
+        burnIntensity: this.deps.getBurnIntensity(),
+      }),
+    })
+      .then(async (resp) => {
+        if (!resp.ok || !resp.body) {
+          onError();
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Process complete SSE lines
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? ""; // retain incomplete last line
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const event = JSON.parse(line.slice(6)) as {
+                type: string;
+                [key: string]: unknown;
+              };
+              if (event.type === "joke") {
+                onJoke(event as unknown as JokeItem);
+              } else if (event.type === "meta") {
+                onMeta(
+                  event as unknown as {
+                    relevant: boolean;
+                    followUp?: string;
+                    redirect?: string;
+                    tags?: string[];
+                    callback?: { text: string; motion: string; intensity: number };
+                  },
+                );
+              }
+            } catch {
+              // malformed SSE line
+            }
+          }
+        }
+      })
+      .catch((e) => {
+        if ((e as Error).name !== "AbortError") {
+          console.error("[brain] generate-speak error:", e);
+        }
+        onError();
+      });
   }
 
   private async _generateJoke(
