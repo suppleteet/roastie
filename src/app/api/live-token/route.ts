@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { LIVE_MODEL, LIVE_VOICE_NAME } from "@/lib/liveConstants";
-import { getLiveSystemPrompt } from "@/lib/livePrompts";
-import type { BurnIntensity } from "@/lib/prompts";
-import { PERSONA_IDS, DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
+import { getLiveTranscriptionPrompt } from "@/lib/livePrompts";
 
 /**
  * Creates an ephemeral auth token for client-side Gemini Live API connections.
  *
- * The token locks the model, system prompt, and voice config server-side so the
- * client can't tamper with them. The API key never leaves the server.
+ * In Comedian Brain mode, Gemini Live is used for STT/VAD only.
+ * The system prompt is a minimal transcription instruction.
+ * All speech is handled by the ComedianBrain via ElevenLabs.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -18,11 +17,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "GEMINI_API_KEY not set" }, { status: 500 });
     }
 
-    const body = await req.json().catch(() => ({}));
-    const burnIntensity: BurnIntensity = ([1, 2, 3, 4, 5] as const).includes(body.burnIntensity)
-      ? body.burnIntensity
-      : 3;
-    const personaId: PersonaId = PERSONA_IDS.includes(body.persona) ? body.persona : DEFAULT_PERSONA;
+    // Body still accepted for API compat — persona/burnIntensity no longer used
+    await req.json().catch(() => ({}));
 
     const ai = new GoogleGenAI({
       apiKey,
@@ -38,7 +34,7 @@ export async function POST(req: NextRequest) {
           model: LIVE_MODEL,
           config: {
             responseModalities: [Modality.AUDIO],
-            systemInstruction: getLiveSystemPrompt(burnIntensity, personaId),
+            systemInstruction: getLiveTranscriptionPrompt(),
             speechConfig: {
               voiceConfig: {
                 prebuiltVoiceConfig: { voiceName: LIVE_VOICE_NAME },

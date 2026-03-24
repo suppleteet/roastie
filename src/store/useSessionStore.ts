@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { MotionState } from "@/lib/motionStates";
 import type { BurnIntensity } from "@/lib/prompts";
 import { DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
+import type { BrainState } from "@/lib/comedianBrainConfig";
 
 export type ConversationEventType = "user-start" | "user-end" | "ai-speech" | "ai-done" | "interrupted" | "listening" | "rotate";
 
@@ -68,6 +69,14 @@ interface SessionState {
   hasSpokenThisSession: boolean;
   lastVisionCallTs: number | null;
 
+  // Comedian Brain state (conversation mode)
+  brainState: BrainState | null;
+  currentQuestion: string | null;
+  userAnswer: string;
+
+  // Transcript history for debug panel
+  transcriptHistory: { role: "user" | "puppet"; text: string; ts: number }[];
+
   // actions
   setPhase: (phase: SessionPhase) => void;
   setSessionMode: (mode: SessionMode) => void;
@@ -90,10 +99,15 @@ interface SessionState {
   setTimeToFirstSpeechMs: (ms: number | null) => void;
   setHasSpokenThisSession: (spoken: boolean) => void;
   setLastVisionCallTs: (ts: number | null) => void;
+  setBrainState: (state: BrainState | null) => void;
+  setCurrentQuestion: (q: string | null) => void;
+  setUserAnswer: (ans: string) => void;
+  pushTranscriptEntry: (role: "user" | "puppet", text: string) => void;
   timelineSpans: TimelineSpan[];
   beginSpan: (row: TimelineRow, label: string, color?: string) => string;
   endSpan: (id: string) => void;
   clearTimelineSpans: () => void;
+  clearTranscriptHistory: () => void;
   reset: () => void;
 }
 
@@ -118,6 +132,10 @@ const initialState = {
   timeToFirstSpeechMs: null as number | null,
   hasSpokenThisSession: false,
   lastVisionCallTs: null as number | null,
+  brainState: null as BrainState | null,
+  currentQuestion: null as string | null,
+  userAnswer: "",
+  transcriptHistory: [] as { role: "user" | "puppet"; text: string; ts: number }[],
   timelineSpans: [] as TimelineSpan[],
 };
 
@@ -153,6 +171,16 @@ export const useSessionStore = create<SessionState>((set) => ({
   setTimeToFirstSpeechMs: (timeToFirstSpeechMs) => set({ timeToFirstSpeechMs }),
   setHasSpokenThisSession: (hasSpokenThisSession) => set({ hasSpokenThisSession }),
   setLastVisionCallTs: (lastVisionCallTs) => set({ lastVisionCallTs }),
+  setBrainState: (brainState) => set({ brainState }),
+  setCurrentQuestion: (currentQuestion) => set({ currentQuestion }),
+  setUserAnswer: (userAnswer) => set({ userAnswer }),
+  pushTranscriptEntry: (role, text) =>
+    set((s) => ({
+      transcriptHistory: [
+        ...s.transcriptHistory.slice(-49),
+        { role, text, ts: Date.now() },
+      ],
+    })),
   beginSpan: (row, label, color) => {
     const id = `${row}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     set((s) => ({
@@ -170,5 +198,6 @@ export const useSessionStore = create<SessionState>((set) => ({
       ),
     })),
   clearTimelineSpans: () => set({ timelineSpans: [] }),
+  clearTranscriptHistory: () => set({ transcriptHistory: [] }),
   reset: () => set(initialState),
 }));

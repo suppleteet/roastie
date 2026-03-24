@@ -48,10 +48,10 @@ const kvetch: PersonaConfig = {
   ],
   motionPreferences: ["thinking", "conspiratorial", "emphasis", "smug"],
   greetings: [
-    "Oh. Oh no. Alright, I'm looking at you and I already have questions.",
-    "Well, here we go. Let me get a good look at the situation.",
-    "Okay. Okay. This is what we're working with today.",
-    "Oh boy. You showed up on purpose looking like that?",
+    "Oh. Oh no. Okay. I'm looking at you and I'm already tired. I've seen a lot of things in my life and somehow this is still happening to me. This is just my day now.",
+    "Well. Here we are. I'm looking at you, you're looking at me, and I have to tell you — I wasn't prepared for this. I knew something was off today and now I understand why.",
+    "Alright. Okay. I knew today was going to be one of those days. And here you are, proving me right, in real time, on camera. I just need a moment to process this.",
+    "Oh boy. You showed up voluntarily. For a roast. Looking like that. On purpose. I respect the commitment even as I question every single decision that led us here.",
   ],
 };
 
@@ -88,10 +88,10 @@ const hype: PersonaConfig = {
   ],
   motionPreferences: ["energetic", "laugh", "emphasis", "shocked"],
   greetings: [
-    "LADIES AND GENTLEMEN! Look what we got here! Oh, we are EATING tonight!",
-    "Oh-HO! Somebody just walked into the WRONG room!",
-    "Look at THIS! I couldn't have asked for a better target!",
-    "WOW! Oh WOW! This is going to be FUN!",
+    "LADIES AND GENTLEMEN! Look what we GOT here! Oh, we are ABSOLUTELY FEASTING tonight! Somebody walked in and they were NOT ready, and I am SO ready, this is the BEST day!",
+    "Oh-HO! Somebody just showed their FACE and I am NOT okay! Look at THIS! This is what I woke up for today! This right here is what DREAMS are made of, people!",
+    "Look at THIS! I couldn't have asked for a better target if I TRIED! The AUDACITY! The absolute NERVE showing up like this! I love it, I love EVERY single thing about this!",
+    "WOW! OH WOW! I have been WAITING all day and now HERE YOU ARE! Buckle up because we are going ALL the way tonight and I am starting IMMEDIATELY!",
   ],
 };
 
@@ -128,10 +128,10 @@ const sweetheart: PersonaConfig = {
   ],
   motionPreferences: ["idle", "thinking", "conspiratorial", "shocked"],
   greetings: [
-    "Oh hi there! Oh my gosh, aren't you just... oh. Hmm. No, you're great!",
-    "Well hello! Let me just... oh. Oh, okay. Welcome!",
-    "Aww, look at you! You look so... comfortable with yourself!",
-    "Hi sweetie! Oh wow, you really just... went for it today, huh?",
+    "Oh hi there! Oh my gosh, look at you! Oh, you're just... oh. Hmm. Well, you made it here, and that's really something. It really is. I mean that from the bottom of my heart.",
+    "Well hello! Oh, come in, come in! Let me just take a look at you... oh. Oh, okay. You know what, I think it's really wonderful that you're so comfortable with yourself. That takes courage.",
+    "Aww, look at you! You look so... you look like you really tried today. And that is just so endearing. I mean that sincerely. You put in the effort and it shows.",
+    "Hi sweetie! Oh wow, you really just went for it today, didn't you? Bold choice. Really bold. I deeply admire people who just commit to a look and stick with it no matter what.",
   ],
 };
 
@@ -168,10 +168,10 @@ const menace: PersonaConfig = {
   ],
   motionPreferences: ["smug", "laugh", "energetic", "conspiratorial"],
   greetings: [
-    "Oh-ho-ho-HO! Look at this! Christmas came early and brought me a TARGET!",
-    "Well HELLO there! Oh, this is going to be too easy!",
-    "Oh WOW! I've been waiting all day for someone like you to show up!",
-    "HA! You actually turned your camera on looking like THAT?",
+    "Oh-ho-ho-HO! Look at this! Christmas came early and somebody out there loves me! You showed up! You ACTUALLY showed up! Oh, I have been saving all my best material for exactly this moment!",
+    "Well HELLO there! Oh, this is going to be too easy! I was worried today was going to be boring and then you just CAME IN and fixed everything. You're a gift. You really are.",
+    "Oh WOW! I've been waiting all day for someone like you to show up and now HERE YOU ARE! I don't even know where to start because there is just SO much to work with! This is incredible!",
+    "HA! You actually turned your camera ON looking like THAT?! I want you to know that somewhere in the world, at this exact moment, someone made an absolutely terrible decision, and it was you, walking into THIS!",
   ],
 };
 

@@ -1,6 +1,9 @@
 # dependencies
 node_modules/
 
+# debug session transcripts
+.debug/
+
 # Next.js
 .next/
 out/

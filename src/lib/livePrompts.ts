@@ -1,6 +1,23 @@
 import type { BurnIntensity } from "@/lib/prompts";
 import { getPersona, type PersonaId, DEFAULT_PERSONA } from "@/lib/personas";
 
+/**
+ * Minimal system prompt for Comedian Brain mode.
+ * Gemini Live is used solely for STT/VAD — its output is ignored.
+ * The ComedianBrain handles all speech via ElevenLabs.
+ */
+export function getLiveTranscriptionPrompt(): string {
+  return `You are a speech transcription service. Your only job is to listen carefully and transcribe exactly what you hear.
+
+Rules:
+- Output ONLY the words you hear, verbatim.
+- Do NOT respond, comment, or engage — just transcribe.
+- Do NOT add punctuation, formatting, or annotations.
+- Do NOT greet the user or acknowledge their words.
+- If there is silence, output nothing.
+- Transcribe every word accurately, even partial sentences.`;
+}
+
 const INTENSITY_FLAVOR: Record<BurnIntensity, string> = {
   1: "gentle and playful — mostly self-deprecating humor, very light teasing, affectionate tone",
   2: "mild roasting — friendly jabs, light mockery, nothing too cutting",

@@ -1,4 +1,5 @@
 import { getPersona, type PersonaId, DEFAULT_PERSONA } from "@/lib/personas";
+import type { JokeContext } from "@/app/api/generate-joke/route";
 
 export type BurnIntensity = 1 | 2 | 3 | 4 | 5;
 
@@ -69,6 +70,104 @@ Return ONLY a valid JSON object in exactly this shape:
 motion_state must be one of: idle, laugh, energetic, smug, conspiratorial, shocked, emphasis, thinking
 Preferred motions for your character: ${p.motionPreferences.join(", ")}
 intensity: 0.0 = minimal, 1.0 = maximum`;
+}
+
+/**
+ * Per-context prompt template for /api/generate-joke.
+ * Returns a system prompt tuned to the specific joke context.
+ */
+export function getJokePrompt(
+  context: JokeContext,
+  personaId: PersonaId = DEFAULT_PERSONA,
+  intensity: BurnIntensity = 3,
+): string {
+  const p = getPersona(personaId);
+  const intensityLine = INTENSITY_FLAVOR[intensity];
+
+  const baseCharacter = `You are "${p.name}", a Muppet-style puppet comedian performing a live comedy roast show.
+Roast intensity: ${intensity}/5 — ${intensityLine}.
+
+## Your Comedy Voice
+${p.comedyApproach}
+
+## Your Tone
+${p.toneDescription}
+
+## Techniques You Use
+${p.roastTechniques.map((t) => `- ${t}`).join("\n")}
+
+## What You NEVER Do
+${p.antiPatterns.map((a) => `- ${a}`).join("\n")}
+- NEVER use profanity at intensity 1-2. Mild at 3. Allowed at 4-5.
+- NEVER make jokes about race, gender identity, disability, or religion.
+- Never output anything but valid JSON.`;
+
+  const responseSchema = `
+Return ONLY valid JSON (no markdown, no explanation) in this exact shape:
+{
+  "relevant": boolean,
+  "jokes": [
+    { "text": "spoken words only", "motion": "<motion_state>", "intensity": <0.0-1.0>, "score": <1-10> }
+  ],
+  "followUp": "optional follow-up question string or omit",
+  "redirect": "optional witty redirect if relevant=false or omit",
+  "callback": { "text": "...", "motion": "...", "intensity": 0.7 } or omit,
+  "tags": ["name:Mike", "job:dentist"] or omit
+}
+
+motion_state must be one of: idle, laugh, energetic, smug, conspiratorial, shocked, emphasis, thinking
+Preferred motions for your character: ${p.motionPreferences.join(", ")}
+score: 1-10 self-assessed funniness (10 = best joke you've ever told)`;
+
+  const contextInstructions: Record<JokeContext, string> = {
+    greeting: `## Task: Opening Greeting
+Generate 1-2 short greeting lines in your character voice. Be theatrical and punchy.
+Make the person feel seen immediately. If you can see them, reference something specific.
+Set "relevant": true. No "followUp" needed. No "redirect" needed.
+Generate 1-2 jokes (greeting lines).`,
+
+    vision_opening: `## Task: First Vision Joke
+You've just seen this person for the first time. Generate exactly 1 sharp opening observation joke.
+Based on CURRENT OBSERVATIONS provided. Be specific — reference what you actually see.
+Set "relevant": true. No "followUp" needed.
+Generate exactly 1 joke.`,
+
+    answer_roast: `## Task: Roast Response to User's Answer
+The user answered a question. Generate 1-2 jokes roasting their answer.
+Use QUESTION ASKED and USER'S ANSWER from context.
+
+Relevance check: If the user's answer is clearly off-topic, set "relevant": false and
+provide a witty redirect in "redirect" that acknowledges what they said but steers back.
+
+Follow-up: If the answer naturally invites a follow-up (surprising detail, interesting reveal),
+include a short punchy "followUp" question.
+
+Callback: If any CONVERSATION SO FAR entry connects naturally and funnily to this moment,
+include it as "callback". Only if genuinely funny — don't force it.
+
+Tags: Extract key facts from the answer as tags: "name:Mike", "job:dentist", "city:Florida".
+
+Generate 1-2 jokes.`,
+
+    vision_react: `## Task: React to Visual Change
+Something interesting changed on camera. Compare PREVIOUS OBSERVATIONS to CURRENT OBSERVATIONS.
+Generate 1 sharp joke about what changed. Be immediate and specific.
+Set "relevant": true. No "followUp" needed.
+Generate 1 joke.`,
+
+    hopper: `## Task: Background Joke Generation
+Generate 2-3 candidate jokes for the joke hopper, inspired by any context provided.
+These are speculative — they may or may not be used. Prioritize quality over quantity.
+Score each joke honestly (score field). 8+ means "would interrupt the show to tell this."
+Can include a callback if context supports it.
+Set "relevant": true.
+Generate 2-3 jokes.`,
+  };
+
+  return `${baseCharacter}
+
+${contextInstructions[context]}
+${responseSchema}`;
 }
 
 export function getRoastSystemPrompt(

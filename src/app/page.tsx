@@ -6,6 +6,7 @@ import ConsentScreen from "@/components/ui/ConsentScreen";
 import HUDOverlay from "@/components/ui/HUDOverlay";
 import ShareScreen from "@/components/ui/ShareScreen";
 import DebugTimeline from "@/components/ui/DebugTimeline";
+import DebugTranscript from "@/components/ui/DebugTranscript";
 import PuppetScene from "@/components/puppet/PuppetScene";
 import WebcamCapture, { type WebcamCaptureHandle } from "@/components/session/WebcamCapture";
 import AudioPlayer, { type AudioPlayerHandle } from "@/components/audio/AudioPlayer";
@@ -51,6 +52,60 @@ export default function Home() {
   const handleStartSession = () => { setMockMode(false); mockModeRef.current = false; setPhase("requesting-permissions"); };
   const handleStartMock    = () => { setMockMode(true);  mockModeRef.current = true;  setPhase("requesting-permissions"); };
 
+  // Capture first frame from a MediaStream and send to vision API immediately
+  function preAnalyzeFirstFrame(stream: MediaStream) {
+    const video = document.createElement("video");
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    video.play().then(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 320;
+      canvas.height = 240;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, 320, 240);
+      const imageBase64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
+      video.pause();
+      video.srcObject = null;
+      if (!imageBase64) return;
+      const { burnIntensity: bi, activePersona: ap } = useSessionStore.getState();
+      logTiming("pre-scan: frame captured, sending to vision");
+      fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64, burnIntensity: bi, mode: "vision", persona: ap }),
+        signal: AbortSignal.timeout(8000),
+      })
+        .then((r) => r.json())
+        .then((d: { observations?: string[] }) => {
+          if (d.observations?.length) {
+            useSessionStore.getState().setObservations(d.observations);
+            logTiming("pre-scan: observations ready");
+          }
+        })
+        .catch(() => {});
+    }).catch(() => {});
+  }
+
+  // Eagerly request camera as soon as the consent screen appears — this way permission
+  // dialog fires while the user is reading, and the first frame is pre-analyzed.
+  useEffect(() => {
+    if (phase !== "consent") return;
+    navigator.mediaDevices
+      .getUserMedia({
+        video: { width: { ideal: 720 }, height: { ideal: 720 }, facingMode: { ideal: "user" } },
+        audio: false, // audio requested at requesting-permissions (after consent is given)
+      })
+      .then((stream) => {
+        setWebcamStream(stream);
+        preAnalyzeFirstFrame(stream);
+      })
+      .catch(() => {
+        // Silently fail — requesting-permissions will retry with proper error display
+      });
+  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Request camera when phase enters requesting-permissions
   useEffect(() => {
     if (phase !== "requesting-permissions") return;
@@ -73,10 +128,25 @@ export default function Home() {
         .catch((e) => { console.warn("[token-prefetch] failed:", e); throw e; });
     }
 
+    // If camera was already granted during consent screen, just add audio and go
+    if (webcamStream) {
+      if (sessionMode === "conversation" && !mockModeRef.current) {
+        navigator.mediaDevices.getUserMedia({ audio: true })
+          .then((audioStream) => {
+            audioStream.getAudioTracks().forEach((t) => webcamStream.addTrack(t));
+            setPhase("roasting");
+          })
+          .catch(() => setPhase("roasting")); // proceed without mic if audio denied
+      } else {
+        setPhase("roasting");
+      }
+      return;
+    }
+
+    // Fallback: camera not yet granted — request everything now
     navigator.mediaDevices
       .getUserMedia({
         video: { width: { ideal: 720 }, height: { ideal: 720 }, facingMode: { ideal: "user" } },
-        // Mock mode doesn't open a mic — skip audio permission to avoid the browser prompt
         audio: sessionMode === "conversation" && !mockModeRef.current,
       })
       .then((stream) => {
@@ -88,7 +158,7 @@ export default function Home() {
         setError(`Camera error: ${err.name} — ${err.message}. Please allow camera access and try again.`);
         setPhase("idle");
       });
-  }, [phase, sessionMode, setPhase, setError]);
+  }, [phase, sessionMode, webcamStream, setPhase, setError]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wire webcam video element ref once stream is ready
   useEffect(() => {
@@ -158,7 +228,7 @@ export default function Home() {
         />
       )}
 
-      {phase === "roasting" && sessionMode === "conversation" && (
+      {(phase === "roasting" || phase === "stopped") && sessionMode === "conversation" && (
         <LiveSessionController
           webcamRef={webcamRef}
           videoRecorderRef={videoRecorderRef}
@@ -174,12 +244,12 @@ export default function Home() {
       {showPuppet && (
         <div className="relative w-full max-w-[560px] aspect-square">
           <PuppetScene canvasRef={puppetCanvasRef} />
-          {/* Webcam PIP — bottom-right, mirrored */}
+          {/* Webcam PIP — bottom-right, mirrored; hidden once stream stops */}
           <video
             ref={pipVideoRef}
             muted
             playsInline
-            className="absolute bottom-4 right-4 w-36 h-36 object-cover rounded-lg border border-white/20 z-20"
+            className={`absolute bottom-4 right-4 w-36 h-36 object-cover rounded-lg border border-white/20 z-20 ${webcamStream ? "" : "hidden"}`}
             style={{ transform: "scaleX(-1)" }}
           />
           {(phase === "roasting" || phase === "stopped") && (
@@ -198,6 +268,9 @@ export default function Home() {
       )}
 
       {phase === "sharing" && <ShareScreen />}
+
+      {/* Debug transcript panel — right side, collapsed by default */}
+      {debugMode && <DebugTranscript />}
 
       {/* Debug timeline — full-width bottom bar */}
       {debugMode && <DebugTimeline />}

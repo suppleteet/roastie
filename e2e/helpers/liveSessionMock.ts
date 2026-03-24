@@ -60,7 +60,7 @@ export class LiveSessionMock {
   readonly clientMessages: string[] = [];
 
   constructor(
-    private readonly page: Page,
+    protected readonly page: Page,
     private readonly options: LiveSessionMockOptions = {},
   ) {}
 

@@ -15,9 +15,15 @@ export const MIC_MIME_TYPE = "audio/pcm;rate=16000";
 
 // Streaming intervals
 export const WEBCAM_SEND_INTERVAL_MS = 1000; // send webcam frame every 1s (max 1fps)
-export const VISION_INTERVAL_MS = 3000;      // vision analyze call every 3s
+export const VISION_INTERVAL_MS = 5000;      // vision analyze call every 5s (brain-driven)
 export const AUDIO_CHUNK_DURATION_MS = 100; // send mic audio every 100ms
 export const MIC_CHUNK_SAMPLES = MIC_SAMPLE_RATE * (AUDIO_CHUNK_DURATION_MS / 1000); // 1600
+
+// Comedian Brain timing (defaults — overridden by comedianConfig.ts window injection in tests)
+export const ANSWER_SILENCE_MS = 500;    // ms of silence = answer complete
+export const ANSWER_WAIT_MS = 2000;      // ms before first prod
+export const MAX_PRODS = 2;              // prods before skipping question
+export const SPECULATIVE_MIN_WORDS = 3;  // words before firing speculative generation
 
 // Session rotation — audio+video sessions cap at 2 min.
 // Rotate at 90s to allow overlap for seamless handoff.

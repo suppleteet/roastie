@@ -13,6 +13,8 @@ export interface PcmPlaybackHandle {
   flush(): void;
   getDestinationStream(): MediaStream | null;
   getAudioContext(): AudioContext | null;
+  /** Returns true when all queued audio has finished playing. */
+  isQueueEmpty(): boolean;
 }
 
 /**
@@ -130,11 +132,23 @@ export function usePcmPlayback(): PcmPlaybackHandle {
     };
   }, [flush]);
 
+  const isQueueEmpty = useCallback((): boolean => {
+    const ctx = ctxRef.current;
+    if (!ctx || ctx.state === "closed") return true;
+    return sourcesRef.current.size === 0 && queueEndRef.current <= ctx.currentTime;
+  }, []);
+
   return {
     enqueueChunk,
     decodeAndEnqueue,
     flush,
-    getDestinationStream: () => destRef.current?.stream ?? null,
+    // Eagerly initialize the AudioContext so the destination stream exists
+    // before recording starts — otherwise the MediaRecorder captures video-only.
+    getDestinationStream: () => {
+      getOrCreateContext();
+      return destRef.current?.stream ?? null;
+    },
     getAudioContext: () => ctxRef.current,
+    isQueueEmpty,
   };
 }
