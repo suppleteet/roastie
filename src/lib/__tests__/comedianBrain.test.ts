@@ -3,6 +3,17 @@ import { ComedianBrain, type ComedianBrainDeps } from "@/lib/comedianBrain";
 import type { BrainState } from "@/lib/comedianBrainConfig";
 import type { JokeResponse } from "@/app/api/generate-joke/route";
 
+vi.mock("@/lib/personas", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/personas")>();
+  return {
+    ...original,
+    PERSONAS: {
+      ...original.PERSONAS,
+      kvetch: { ...original.PERSONAS.kvetch, greetings: ["Test greeting."] },
+    },
+  };
+});
+
 // ─── Mock fetch ─────────────────────────────────────────────────────────────────
 
 function mockFetchResponse(response: JokeResponse) {
@@ -61,15 +72,11 @@ function driveToWaitAnswer(brain: ComedianBrain): void {
 // ─── Globals ─────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
+  vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
   vi.stubGlobal("sessionStorage", {
     getItem: vi.fn().mockReturnValue(null),
     setItem: vi.fn(),
   });
-  vi.stubGlobal("require", vi.fn().mockReturnValue({
-    PERSONAS: {
-      kvetch: { greetings: ["Oh. Oh no. Alright, I'm looking at you."] },
-    },
-  }));
 });
 
 afterEach(() => {
@@ -88,12 +95,12 @@ describe("ComedianBrain — start() / greeting", () => {
     expect(getStates(deps)).toContain("greeting");
   });
 
-  it("queues a greeting TTS immediately", () => {
-    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+  it("queues a greeting TTS immediately from persona greetings", () => {
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
     brain.start();
     expect(deps.queueSpeak).toHaveBeenCalledTimes(1);
+    expect(deps.queueSpeak).toHaveBeenCalledWith("Test greeting.", "energetic", 0.8);
   });
 
   it("isListening() returns false in greeting", () => {
@@ -156,19 +163,18 @@ describe("ComedianBrain — Q&A cycle", () => {
     expect(brain.isListening()).toBe(true);
   });
 
-  it("queues a question (with ?) to TTS in ask_question", () => {
+  it("transitions directly to wait_answer from ask_question (no question TTS)", () => {
     vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
     brain.start();
     brain.onTtsQueueDrained();
     brain.onVisionUpdate([]);
-    brain.onTtsQueueDrained(); // vision_jokes → ask_question (also calls enterAskQuestion)
+    brain.onTtsQueueDrained(); // vision_jokes → ask_question → wait_answer (immediate, no TTS)
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const calls = (deps.queueSpeak as ReturnType<typeof vi.fn>).mock.calls as Array<any[]>;
-    const questionCalls = calls.filter(([text]) => (text as string).includes("?"));
-    expect(questionCalls.length).toBeGreaterThan(0);
+    const states = getStates(deps);
+    expect(states).toContain("ask_question");
+    expect(states).toContain("wait_answer");
   });
 
   it("routes inputTranscription to answerBuffer in wait_answer", () => {

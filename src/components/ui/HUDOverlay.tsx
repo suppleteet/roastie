@@ -15,6 +15,7 @@ export default function HUDOverlay({ onStartSession, onStartMock, isMock = false
   const isSpeaking = useSessionStore((s) => s.isSpeaking);
   const isListening = useSessionStore((s) => s.isListening);
   const isUserSpeaking = useSessionStore((s) => s.isUserSpeaking);
+  const isUserLaughing = useSessionStore((s) => s.isUserLaughing);
   const brainState = useSessionStore((s) => s.brainState);
   const currentQuestion = useSessionStore((s) => s.currentQuestion);
 
@@ -42,7 +43,8 @@ export default function HUDOverlay({ onStartSession, onStartMock, isMock = false
             Speaking…
           </span>
         )}
-        {isDev && isRoasting && isConversation && isListening && !isSpeaking && (
+        {isDev && isRoasting && isConversation && isListening && !isSpeaking &&
+          (brainState === "wait_answer" || brainState === "prodding" || brainState === "pre_generate") && (
           <span className="text-xs text-green-400 font-bold uppercase tracking-wider ml-2">
             Listening…
           </span>
@@ -50,6 +52,11 @@ export default function HUDOverlay({ onStartSession, onStartMock, isMock = false
         {isDev && isRoasting && isConversation && isUserSpeaking && (
           <span className="text-xs text-cyan-400 font-bold uppercase tracking-wider animate-pulse ml-2">
             You're talking…
+          </span>
+        )}
+        {isDev && isRoasting && isConversation && isUserLaughing && (
+          <span className="text-xs text-yellow-300 font-bold uppercase tracking-wider animate-pulse ml-2">
+            😂 Laughing
           </span>
         )}
         {isDev && isRoasting && isConversation && brainState && (

@@ -21,7 +21,7 @@ import { COMEDIAN_CONFIG } from "@/lib/comedianConfig";
 import { QUESTION_BANK, type ComedyQuestion } from "@/lib/questionBank";
 import { diffObservations } from "@/lib/visionDiff";
 import type { JokeResponse, JokeItem } from "@/app/api/generate-joke/route";
-import type { PersonaId } from "@/lib/personas";
+import { PERSONAS, type PersonaId } from "@/lib/personas";
 import type { BurnIntensity } from "@/lib/prompts";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -297,9 +297,6 @@ export class ComedianBrain {
       case "vision_jokes":
         this.enterAskQuestion();
         break;
-      case "ask_question":
-        this.enterWaitAnswer();
-        break;
       case "prodding":
         // Prod finished playing with no interruption — start next prod or skip
         this.prodCount++;
@@ -360,7 +357,6 @@ export class ComedianBrain {
       usedIndices = JSON.parse(sessionStorage.getItem(greetingKey) ?? "[]") as number[];
     } catch { /* ignore */ }
 
-    // Get persona greetings
     const greetings = this._getPersonaGreetings();
     const available = greetings
       .map((_, i) => i)
@@ -369,7 +365,6 @@ export class ComedianBrain {
     const idx = pool[Math.floor(Math.random() * pool.length)];
     const greetingText = greetings[idx];
 
-    // Track used
     const newUsed = available.length > 0 ? [...usedIndices, idx] : [idx];
     try {
       sessionStorage.setItem(greetingKey, JSON.stringify(newUsed));
@@ -475,11 +470,9 @@ export class ComedianBrain {
     this.deps.setCurrentQuestion(this.currentQuestion.question);
     this._addLedger("question", this.currentQuestion.question, []);
 
-    const questionText = this.micAvailable
-      ? this.currentQuestion.question
-      : this._rhetoricalVersion(this.currentQuestion.question);
-
-    this.deps.queueSpeak(questionText, "emphasis", 0.75);
+    // Don't speak the question as a separate TTS request — the inflection breaks flow.
+    // The question is tracked internally; the brain waits for the user to speak naturally.
+    this.enterWaitAnswer();
   }
 
   private enterWaitAnswer(): void {
@@ -969,15 +962,7 @@ export class ComedianBrain {
   }
 
   private _getPersonaGreetings(): string[] {
-    // Import inline to avoid circular deps — greetings are in personas.ts
-    // We access them via a dynamic require pattern
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { PERSONAS } = require("@/lib/personas") as { PERSONAS: Record<string, { greetings: string[] }> };
-      return PERSONAS[this.deps.getPersona()]?.greetings ?? ["Hey there! Welcome!"];
-    } catch {
-      return ["Hey there! Welcome!"];
-    }
+    return PERSONAS[this.deps.getPersona()]?.greetings ?? ["Hey there!"];
   }
 
   private _rhetoricalVersion(question: string): string {

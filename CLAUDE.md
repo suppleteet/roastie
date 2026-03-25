@@ -90,6 +90,7 @@ public/worklets/       AudioWorklet processors (mic-capture-processor.js)
 6. **LiveSessionController uses getState()**: All store access in WebSocket callbacks and long-lived closures must use `useSessionStore.getState()` to avoid stale closures. Only `phase` is subscribed via selector (for lifecycle).
 7. **ComedianBrain controls all speech**: In conversation mode, DO NOT route Gemini output to TTS. The brain calls `queueSpeak()` directly. Gemini Live is STT/VAD only.
 8. **Mic gating**: `useMicCapture` callback checks `brain.isAudioActive()` before sending audio. Mic is `"passive"` (keeps Gemini VAD warm) in most states; only `"off"` during `greeting` and `vision_jokes`. `"listening"` in `wait_answer`, `prodding`, `pre_generate`.
+10. **LLM-generated greetings**: `enterGreeting()` calls `_generateJoke({ context: "greeting" })` asynchronously — no hardcoded greeting strings. Greeting and vision-opening prefetch fire in parallel. The `.then()` callback guards against stale state with `if (this.state !== "greeting") return`.
 9. **TTS drain detection**: LiveSessionController uses `playback.isQueueEmpty()` in a rAF loop to detect when speech finishes, then calls `brain.onTtsQueueDrained()`.
 
 ## Test Config Injection

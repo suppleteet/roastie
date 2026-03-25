@@ -73,10 +73,10 @@ test("debug checkbox toggles back to landing screen", async ({ page }) => {
 
   // Uncheck debug → should return to idle/landing
   await page.locator("input[type=checkbox]").uncheck();
-  await expect(page.getByRole("button", { name: /start getting roasted/i })).toBeVisible({ timeout: 5000 });
+  await expect(page.getByRole("button", { name: /roast me/i })).toBeVisible({ timeout: 5000 });
 });
 
-test("consent screen is reachable from landing", async ({ page }) => {
+test("landing Roast Me button starts a session", async ({ page }) => {
   await page.route("/api/live-token", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ token: "fake-token" }) })
   );
@@ -93,14 +93,12 @@ test("consent screen is reachable from landing", async ({ page }) => {
   });
 
   await page.goto("/");
-  // Disable debug first to get to landing
+  // Disable debug to get to landing screen
   await expect(page.locator("[data-testid='hud-overlay']")).toBeVisible({ timeout: 10000 });
   await page.locator("input[type=checkbox]").uncheck();
-  await expect(page.getByRole("button", { name: /start getting roasted/i })).toBeVisible({ timeout: 5000 });
+  await expect(page.getByRole("button", { name: /roast me/i })).toBeVisible({ timeout: 5000 });
 
-  // Now navigate through consent
-  await page.getByRole("button", { name: /start getting roasted/i }).click();
-  await expect(page.getByText(/set your burn level/i)).toBeVisible({ timeout: 5000 });
-  await page.getByRole("button", { name: /ready/i }).click();
+  // Click Roast Me → goes directly to requesting-permissions → session starts
+  await page.getByRole("button", { name: /roast me/i }).click();
   await expect(page.locator("[data-testid='hud-overlay']")).toBeVisible({ timeout: 10000 });
 });

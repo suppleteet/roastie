@@ -4,7 +4,7 @@ import type { BurnIntensity } from "@/lib/prompts";
 import { DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 import type { BrainState } from "@/lib/comedianBrainConfig";
 
-export type ConversationEventType = "user-start" | "user-end" | "ai-speech" | "ai-done" | "interrupted" | "listening" | "rotate";
+export type ConversationEventType = "user-start" | "user-end" | "ai-speech" | "ai-done" | "interrupted" | "listening" | "rotate" | "user-laugh";
 
 export type TimelineRow = "user" | "gemini" | "tts" | "vision" | "session";
 
@@ -73,6 +73,7 @@ interface SessionState {
   brainState: BrainState | null;
   currentQuestion: string | null;
   userAnswer: string;
+  isUserLaughing: boolean; // placeholder — detection not yet implemented
 
   // Transcript history for debug panel
   transcriptHistory: { role: "user" | "puppet"; text: string; ts: number }[];
@@ -102,6 +103,7 @@ interface SessionState {
   setBrainState: (state: BrainState | null) => void;
   setCurrentQuestion: (q: string | null) => void;
   setUserAnswer: (ans: string) => void;
+  setIsUserLaughing: (laughing: boolean) => void;
   pushTranscriptEntry: (role: "user" | "puppet", text: string) => void;
   timelineSpans: TimelineSpan[];
   beginSpan: (row: TimelineRow, label: string, color?: string) => string;
@@ -135,6 +137,7 @@ const initialState = {
   brainState: null as BrainState | null,
   currentQuestion: null as string | null,
   userAnswer: "",
+  isUserLaughing: false,
   transcriptHistory: [] as { role: "user" | "puppet"; text: string; ts: number }[],
   timelineSpans: [] as TimelineSpan[],
 };
@@ -174,6 +177,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setBrainState: (brainState) => set({ brainState }),
   setCurrentQuestion: (currentQuestion) => set({ currentQuestion }),
   setUserAnswer: (userAnswer) => set({ userAnswer }),
+  setIsUserLaughing: (isUserLaughing) => set({ isUserLaughing }),
   pushTranscriptEntry: (role, text) =>
     set((s) => ({
       transcriptHistory: [

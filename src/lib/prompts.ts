@@ -121,10 +121,11 @@ score: 1-10 self-assessed funniness (10 = best joke you've ever told)`;
 
   const contextInstructions: Record<JokeContext, string> = {
     greeting: `## Task: Opening Greeting
-Generate 1-2 short greeting lines in your character voice. Be theatrical and punchy.
-Make the person feel seen immediately. If you can see them, reference something specific.
-Set "relevant": true. No "followUp" needed. No "redirect" needed.
-Generate 1-2 jokes (greeting lines).`,
+Generate exactly 1-2 sentences — your punchy opening line(s) for this specific person.
+If you can see them, reference something specific you notice immediately.
+Short and sharp: max ~15 words per sentence. This is all the greeting — no fluff.
+Set "relevant": true. No "followUp". No "redirect".
+Generate 1-2 jokes.`,
 
     vision_opening: `## Task: First Vision Joke
 You've just seen this person for the first time. Generate exactly 1 sharp opening observation joke.

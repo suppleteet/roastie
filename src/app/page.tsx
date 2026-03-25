@@ -27,6 +27,8 @@ export default function Home() {
   const timeToFirstSpeechMs = useSessionStore((s) => s.timeToFirstSpeechMs);
   const activePersona = useSessionStore((s) => s.activePersona);
   const setActivePersona = useSessionStore((s) => s.setActivePersona);
+  const brainState = useSessionStore((s) => s.brainState);
+  const isThinking = brainState === "generating" || brainState === "pre_generate";
   const lastVisionCallTs = useSessionStore((s) => s.lastVisionCallTs);
   const IS_DEV = process.env.NODE_ENV !== "production";
   const [debugMode, setDebugMode] = useState(IS_DEV);
@@ -254,7 +256,7 @@ export default function Home() {
       {phase === "consent" && <ConsentScreen />}
 
       {showPuppet && (
-        <div className="relative w-full max-w-[560px] aspect-square">
+        <div className={`relative w-full max-w-[560px] aspect-square transition-opacity duration-500 ${isThinking ? "opacity-40" : "opacity-100"}`}>
           <PuppetScene canvasRef={puppetCanvasRef} />
           {/* Webcam PIP — bottom-right, mirrored; hidden once stream stops */}
           <video
