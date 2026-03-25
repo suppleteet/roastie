@@ -94,7 +94,10 @@ export async function POST(req: NextRequest) {
 
     const result = await ai.models.generateContent({
       model: ROAST_MODEL,
-      config: { systemInstruction: systemPrompt },
+      config: {
+        systemInstruction: systemPrompt,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
       contents: [{ role: "user", parts: userParts }],
     });
 

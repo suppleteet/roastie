@@ -183,14 +183,11 @@ export class ComedianBrain {
     }
     this.started = true;
 
-    // Fixed prefix: establish identity before anything else.
-    // name → hometown → city must come first (in that order), then shuffle the rest.
-    const ORDERED_FIRST = ["name", "hometown", "city"];
-    const fixed = ORDERED_FIRST
-      .map((id) => QUESTION_BANK.find((q) => q.id === id))
-      .filter((q): q is ComedyQuestion => q !== undefined);
-    const rest = shuffle(QUESTION_BANK.filter((q) => !ORDERED_FIRST.includes(q.id)));
-    this.shuffledQuestions = [...fixed, ...rest];
+    // Always lead with name so the puppet has something personal to work with.
+    // Everything else shuffles freely — avoids the show feeling like a questionnaire.
+    const nameQuestion = QUESTION_BANK.find((q) => q.id === "name");
+    const rest = shuffle(QUESTION_BANK.filter((q) => q.id !== "name"));
+    this.shuffledQuestions = nameQuestion ? [nameQuestion, ...rest] : shuffle(QUESTION_BANK);
     this.questionIndex = 0;
     this.ledger = [];
     this.jokeHopper = [];
@@ -571,9 +568,13 @@ export class ComedianBrain {
     this.deps.setMotion("thinking", 0.7);
     this._addLedger("answer", answer, []);
 
-    // Queue an immediate filler so the user hears something right away while the API generates
-    const fillers = ComedianBrain.GENERATING_FILLERS;
-    const filler = fillers[Math.floor(Math.random() * fillers.length)];
+    // Queue an immediate filler so the user hears something right away while the API generates.
+    // Short answers: echo the answer back ("Tyler." / "San Francisco.") — instant and funny.
+    // Longer answers: use a generic short reaction.
+    const answerWords = answer.trim().split(/\s+/);
+    const filler = answerWords.length <= 3
+      ? `${answer}.`
+      : ComedianBrain.GENERATING_FILLERS[Math.floor(Math.random() * ComedianBrain.GENERATING_FILLERS.length)];
     this.deps.queueSpeak(filler, "thinking", 0.6);
     this.deps.logTiming(`brain: filler — "${filler}"`);
 
