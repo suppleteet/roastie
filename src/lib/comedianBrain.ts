@@ -333,8 +333,9 @@ export class ComedianBrain {
         this._onDeliveringDrained();
         break;
       case "redirecting":
-        // Re-ask the same question
-        this.enterAskQuestion(true /* same question */);
+        // After a redirect, advance to the next question — re-asking loops if the user keeps
+        // giving off-topic answers (the puppet already nudged them back; move on)
+        this.enterAskQuestion();
         break;
       case "vision_react":
         this.enterAskQuestion();
@@ -637,9 +638,17 @@ export class ComedianBrain {
         this.deps.logTiming(`brain: api meta — relevant=${meta.relevant} jokes=${jokesQueued} followUp=${!!meta.followUp} redirect=${!!meta.redirect}`);
 
         if (!meta.relevant && meta.redirect) {
-          // Irrelevant answer — cancel anything queued and redirect
-          this.deps.cancelSpeech();
-          this._transition("delivering");
+          if (jokesQueued > 0) {
+            // A joke already streamed and is playing — don't queue the redirect on top of it.
+            // The joke addressed the irrelevancy; let it finish and advance normally.
+            this.deps.logTiming("brain: irrelevant but joke already delivered — advancing (no redirect)");
+            return;
+          }
+          // No joke played yet — redirect immediately
+          if (this.state === "generating") {
+            this._transition("delivering");
+            this.deps.setMotion("energetic", 0.8);
+          }
           this.deps.queueSpeak(meta.redirect, "smug", 0.7);
           this._addLedger("joke", meta.redirect, []);
           this._transition("redirecting");

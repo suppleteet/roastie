@@ -9,14 +9,14 @@
 
 const defaults = {
   // Timing (milliseconds)
-  answerSilenceMs: 1500,         // silence after speech = answer complete (Gemini sends words with variable gaps)
+  answerSilenceMs: 800,          // silence after speech = answer complete
   answerWaitMs: 6000,            // silence before first prod
   visionIntervalMs: 5000,        // how often vision analyze fires
   greetingVisionTimeoutMs: 3000, // how long to wait for vision during greeting
 
   // Behavior
   maxProds: 2,                            // prods before skipping question
-  speculativeMinWords: 2,                 // words before firing speculative generation
+  speculativeMinWords: 1,                 // words before firing speculative generation
   hopperMaxSize: 8,                       // max jokes in hopper
   hopperMinScoreForBonus: 8,              // score threshold for unsolicited bonus jokes
   hopperMinScoreForFallback: 6,           // score threshold for silence fallback

@@ -99,8 +99,13 @@ test.describe("Full Roast Run", () => {
         role: string; text: string; ts: number;
       }>
     );
-    const stateHistory = await driver.getStateHistory();
     const ttsRequests = driver.getTtsRequests();
+    // Derive state path from timing log — more reliable than MutationObserver
+    // (rapid React batching can cause the DOM observer to miss transient states)
+    const stateHistory = timingLog
+      .filter((l) => l.includes("brain: →"))
+      .map((l) => l.split("brain: →")[1]?.trim() ?? "")
+      .filter(Boolean);
 
     // Save to .debug/last-session.json so it can be read between test runs
     await page.request.post("/api/save-log", {
@@ -156,7 +161,7 @@ test.describe("Full Roast Run", () => {
     console.log(`  TTS requests  : ${ttsRequests.length}`);
     console.log(`  Puppet lines  : ${puppetLines.length}`);
     console.log(`  User lines    : ${userLines.length}`);
-    console.log(`  State changes : ${stateHistory.length}`);
+    console.log(`  State visits  : ${stateHistory.length}`);
     console.log(`  Issues found  : ${issues.length}`);
     console.log("");
     console.log("STATE PATH:");
