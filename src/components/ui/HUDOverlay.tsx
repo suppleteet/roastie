@@ -21,6 +21,7 @@ export default function HUDOverlay({ onStartSession, onStartMock, isMock = false
   const isConversation = sessionMode === "conversation";
   const isRoasting = phase === "roasting";
   const isStopped = phase === "stopped";
+  const isDev = process.env.NODE_ENV !== "production";
 
   return (
     <div
@@ -36,28 +37,28 @@ export default function HUDOverlay({ onStartSession, onStartMock, isMock = false
           {isConversation && " · Conversation"}
           {isMock && <span className="text-yellow-400"> · MOCK</span>}
         </span>
-        {isRoasting && isSpeaking && (
+        {isDev && isRoasting && isSpeaking && (
           <span className="text-xs text-orange-400 font-bold uppercase tracking-wider animate-pulse ml-2">
             Speaking…
           </span>
         )}
-        {isRoasting && isConversation && isListening && !isSpeaking && (
+        {isDev && isRoasting && isConversation && isListening && !isSpeaking && (
           <span className="text-xs text-green-400 font-bold uppercase tracking-wider ml-2">
             Listening…
           </span>
         )}
-        {isRoasting && isConversation && isUserSpeaking && (
+        {isDev && isRoasting && isConversation && isUserSpeaking && (
           <span className="text-xs text-cyan-400 font-bold uppercase tracking-wider animate-pulse ml-2">
             You're talking…
           </span>
         )}
-        {isRoasting && isConversation && brainState && (
+        {isDev && isRoasting && isConversation && brainState && (
           <span className="text-xs text-white/30 font-mono ml-2">{brainState}</span>
         )}
       </div>
 
       {/* Current question (conversation mode) */}
-      {isRoasting && isConversation && currentQuestion && (
+      {isDev && isRoasting && isConversation && currentQuestion && (
         <div className="absolute top-10 right-4 max-w-[240px] pointer-events-none">
           <div className="bg-black/60 rounded px-2 py-1 font-mono text-[10px] text-cyan-300/60 leading-tight">
             Q: {currentQuestion}

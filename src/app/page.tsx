@@ -28,7 +28,8 @@ export default function Home() {
   const activePersona = useSessionStore((s) => s.activePersona);
   const setActivePersona = useSessionStore((s) => s.setActivePersona);
   const lastVisionCallTs = useSessionStore((s) => s.lastVisionCallTs);
-  const [debugMode, setDebugMode] = useState(true);
+  const IS_DEV = process.env.NODE_ENV !== "production";
+  const [debugMode, setDebugMode] = useState(IS_DEV);
   const [mockMode, setMockMode] = useState(false);
   const mockModeRef = useRef(false); // ref so the requesting-permissions effect reads current value
   const [visionElapsedSecs, setVisionElapsedSecs] = useState<number | null>(null);
@@ -205,16 +206,18 @@ export default function Home() {
 
   return (
     <main className="relative min-h-screen bg-black flex items-center justify-center">
-      {/* Debug toggle */}
-      <label className="absolute top-3 right-3 z-50 flex items-center gap-2 text-white/50 text-xs cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={debugMode}
-          onChange={(e) => handleDebugToggle(e.target.checked)}
-          className="accent-yellow-400"
-        />
-        debug
-      </label>
+      {/* Debug toggle — dev only */}
+      {IS_DEV && (
+        <label className="absolute top-3 right-3 z-50 flex items-center gap-2 text-white/50 text-xs cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={debugMode}
+            onChange={(e) => handleDebugToggle(e.target.checked)}
+            className="accent-yellow-400"
+          />
+          debug
+        </label>
+      )}
       <AudioPlayer ref={audioPlayerRef} />
       <VideoRecorder ref={videoRecorderRef} />
       <WebcamCapture ref={webcamRef} stream={webcamStream} />
@@ -269,14 +272,10 @@ export default function Home() {
 
       {phase === "sharing" && <ShareScreen />}
 
-      {/* Debug transcript panel — right side, collapsed by default */}
-      {debugMode && <DebugTranscript />}
-
-      {/* Debug timeline — full-width bottom bar */}
-      {debugMode && <DebugTimeline />}
-
-      {/* Debug panel — top left */}
-      {debugMode && (
+      {/* Debug panels — dev only */}
+      {IS_DEV && debugMode && <DebugTranscript />}
+      {IS_DEV && debugMode && <DebugTimeline />}
+      {IS_DEV && debugMode && (
         <div className="fixed top-3 left-3 z-50 flex flex-col gap-2 max-w-xs">
           {/* Persona selector */}
           <div className="bg-black/80 border border-purple-400/40 rounded p-2 font-mono text-[10px] text-purple-300 leading-tight pointer-events-auto">
