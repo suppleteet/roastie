@@ -444,6 +444,8 @@ export class ComedianBrain {
         this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
         this.lastJokeIntensity = joke.intensity;
       }
+      // Clear hopper — vision-opening jokes must not replay as Q&A bonus jokes
+      this.jokeHopper = [];
       this.previousObservations = [...observations];
     });
   }
@@ -559,10 +561,21 @@ export class ComedianBrain {
     this.enterGenerating(answer);
   }
 
+  // Short filler reactions — play immediately when generating starts so there's no dead air
+  private static readonly GENERATING_FILLERS = [
+    "Hmm.", "Ha.", "Oh.", "Huh.", "Mmm.", "Right.", "I see.", "Oh?", "Noted.", "Okay.",
+  ];
+
   private enterGenerating(answer: string): void {
     this._transition("generating");
     this.deps.setMotion("thinking", 0.7);
     this._addLedger("answer", answer, []);
+
+    // Queue an immediate filler so the user hears something right away while the API generates
+    const fillers = ComedianBrain.GENERATING_FILLERS;
+    const filler = fillers[Math.floor(Math.random() * fillers.length)];
+    this.deps.queueSpeak(filler, "thinking", 0.6);
+    this.deps.logTiming(`brain: filler — "${filler}"`);
 
     const q = this.currentQuestion;
     const conversationSoFar = this._getLedgerContext();
@@ -682,7 +695,7 @@ export class ComedianBrain {
         }
 
         // Bonus hopper joke — only attach when there are real jokes to accompany it
-        if (this.transitionCount % 2 === 0) {
+        if (this.transitionCount % 4 === 0) {
           const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
           if (bonus) {
             this.deps.queueSpeak("Oh wait, one more thing—", "emphasis", 0.7);
