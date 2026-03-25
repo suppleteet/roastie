@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { useSessionStore } from "@/store/useSessionStore";
 import LandingScreen from "@/components/ui/LandingScreen";
 import ConsentScreen from "@/components/ui/ConsentScreen";
@@ -166,7 +166,16 @@ export default function Home() {
     webcamVideoRef.current = webcamRef.current?.getVideoElement() ?? null;
   }, [webcamStream]);
 
-  // Wire PIP video element to webcam stream
+  // Wire PIP video element to webcam stream.
+  // useCallback ref so it re-fires when the element mounts/unmounts (showPuppet toggles DOM).
+  const pipRefCallback = useCallback((el: HTMLVideoElement | null) => {
+    pipVideoRef.current = el;
+    if (!el) return;
+    el.srcObject = webcamStream;
+    if (webcamStream) el.play().catch(() => {});
+  }, [webcamStream]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Also sync stream to already-mounted element when webcamStream changes
   useEffect(() => {
     if (!pipVideoRef.current) return;
     pipVideoRef.current.srcObject = webcamStream;
@@ -249,7 +258,7 @@ export default function Home() {
           <PuppetScene canvasRef={puppetCanvasRef} />
           {/* Webcam PIP — bottom-right, mirrored; hidden once stream stops */}
           <video
-            ref={pipVideoRef}
+            ref={pipRefCallback}
             muted
             playsInline
             className={`absolute bottom-4 right-4 w-36 h-36 object-cover rounded-lg border border-white/20 z-20 ${webcamStream ? "" : "hidden"}`}
