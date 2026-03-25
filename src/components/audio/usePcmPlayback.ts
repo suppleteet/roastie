@@ -15,6 +15,8 @@ export interface PcmPlaybackHandle {
   getAudioContext(): AudioContext | null;
   /** Returns true when all queued audio has finished playing. */
   isQueueEmpty(): boolean;
+  /** Returns milliseconds of audio remaining in the queue (0 when empty). */
+  getPlaybackRemainingMs(): number;
   /** Route an external stream (e.g. mic) to the recording destination only
    *  (NOT speakers — avoids feedback). Returns a disconnect function. */
   addInputToRecording(stream: MediaStream): () => void;
@@ -141,6 +143,12 @@ export function usePcmPlayback(): PcmPlaybackHandle {
     return sourcesRef.current.size === 0 && queueEndRef.current <= ctx.currentTime;
   }, []);
 
+  const getPlaybackRemainingMs = useCallback((): number => {
+    const ctx = ctxRef.current;
+    if (!ctx || ctx.state === "closed") return 0;
+    return Math.max(0, (queueEndRef.current - ctx.currentTime) * 1000);
+  }, []);
+
   return {
     enqueueChunk,
     decodeAndEnqueue,
@@ -153,6 +161,7 @@ export function usePcmPlayback(): PcmPlaybackHandle {
     },
     getAudioContext: () => ctxRef.current,
     isQueueEmpty,
+    getPlaybackRemainingMs,
     addInputToRecording: (stream: MediaStream): (() => void) => {
       const ctx = getOrCreateContext();
       const source = ctx.createMediaStreamSource(stream);

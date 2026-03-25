@@ -21,6 +21,7 @@ import {
 import { getLiveTranscriptionPrompt } from "@/lib/livePrompts";
 import { ComedianBrain } from "@/lib/comedianBrain";
 import type { MotionState } from "@/lib/motionStates";
+import { COMEDIAN_CONFIG } from "@/lib/comedianConfig";
 
 
 interface Props {
@@ -60,6 +61,7 @@ export default function LiveSessionController({
   // rAF for TTS drain detection
   const drainRafRef = useRef<number>(0);
   const wasDrainedRef = useRef(true); // track edge: false → true
+  const earlyListenFiredRef = useRef(false); // true once early-listen has fired for current question
 
   // Mic → recording mix (disconnect function returned by addInputToRecording)
   const micRecordingDisconnectRef = useRef<(() => void) | null>(null);
@@ -182,6 +184,7 @@ export default function LiveSessionController({
   function startDrainPolling(): void {
     stopDrainPolling();
     wasDrainedRef.current = false;
+    earlyListenFiredRef.current = false;
 
     function poll() {
       if (!isRunningRef.current) return;
@@ -195,11 +198,23 @@ export default function LiveSessionController({
         if (isEmpty && !wasDrainedRef.current) {
           // Transition: playing → drained
           wasDrainedRef.current = true;
+          earlyListenFiredRef.current = false;
           store.setIsSpeaking(false);
           store.setActiveMotionState("idle", 0.3);
           brainRef.current?.onTtsQueueDrained();
         } else if (!isEmpty) {
           wasDrainedRef.current = false;
+
+          // Activate mic early when question is nearly done
+          if (
+            !earlyListenFiredRef.current &&
+            store.brainState === "ask_question" &&
+            playback.getPlaybackRemainingMs() <= COMEDIAN_CONFIG.earlyListenMs
+          ) {
+            earlyListenFiredRef.current = true;
+            brainRef.current?.activateEarlyListen();
+            store.setIsListening(true);
+          }
         }
 
         drainRafRef.current = requestAnimationFrame(poll);

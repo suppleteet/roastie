@@ -31,8 +31,8 @@ const INTENSITY_FLAVOR: Record<BurnIntensity, string> = {
   1: "gentle and playful — mostly self-deprecating humor, very light teasing, affectionate tone",
   2: "mild roasting — friendly jabs, light mockery, nothing too cutting",
   3: "medium heat — confident roasting, pointed observations, some edge but still fun",
-  4: "spicy — sharp insults, cutting observations, savage but comedic",
-  5: "MAXIMUM BURN — absolutely savage, no mercy, brutal comedy roast style",
+  4: "sharp and savage — every line should sting a little. No softening, no hedging. Lead with the insult, commit to it. The joke should make them wince before they laugh.",
+  5: "MAXIMUM BURN — absolutely relentless, no mercy, no safety net. Most savage possible read on everything you see. Use foul language.",
 };
 
 export function getGreetingSystemPrompt(personaId: PersonaId = DEFAULT_PERSONA): string {
@@ -129,14 +129,14 @@ score: 1-10 self-assessed funniness (10 = best joke you've ever told)`;
     greeting: `## Task: Opening Greeting
 Generate 1-2 sentences — your punchy opening for this specific person.
 If you can see them, reference something specific you notice immediately.
-Max 16 words per sentence. Punchline at the end of each. No wind-up.
+Max 20 words per sentence. Punchline at the end of each. No wind-up.
 Set "relevant": true. No "followUp". No "redirect".
 Generate 1-2 jokes.`,
 
     vision_opening: `## Task: First Vision Joke
 You've just seen this person for the first time. Generate exactly 1 sharp opening observation joke.
 Based on CURRENT OBSERVATIONS provided. Be specific — reference what you actually see.
-Max 16 words. Punchline at the end.
+Max 20 words. Punchline at the end.
 Set "relevant": true. No "followUp" needed.
 Generate exactly 1 joke.`,
 
@@ -145,13 +145,16 @@ The user answered a question. Generate 1-2 jokes roasting their answer.
 Use QUESTION ASKED and USER'S ANSWER from context.
 
 CRITICAL: Your jokes MUST directly reference and roast the USER'S ANSWER.
-Do NOT make jokes about their appearance, background, or room decor instead — roast THAT answer.
+Do NOT make jokes about their appearance or background instead — roast THAT answer.
 
-FORMAT: Max 16 words per sentence, punchline at the end. Each sentence self-contained.
+FORMAT: Max 20 words per sentence, punchline at the end. Each sentence self-contained.
 
-BACKGROUND RULE: Do NOT reference background items (furniture, decor, posters, room details) in ANY
-response unless BOTH "city:" AND "hometown:" tags appear in the CONVERSATION SO FAR. Without full
-location context, background details yield generic jokes. Focus on the answer, appearance, clothing.
+BACKGROUND RULE:
+- NEVER joke about specific background objects (a bookshelf, a poster, a lamp, a chair, etc.)
+- You MAY joke about the overall inferred LOCATION if multiple background elements clearly point to one
+  place — office, bedroom, café, bus, gym, etc. Joke about the concept of being there, not the objects.
+- Example OK: "You're clearly in a cubicle, which explains why all joy has left your eyes."
+- Example NOT OK: "Nice poster behind you." or "I see you have a bookshelf."
 
 Relevance check: If the user's answer is clearly off-topic, set "relevant": false and
 provide a witty redirect in "redirect" that acknowledges what they said but steers back.
@@ -175,13 +178,16 @@ Generate 1 joke.`,
     hopper: `## Task: Background Joke Generation
 Generate 2-3 candidate jokes for the joke hopper, inspired by any context provided.
 These are speculative — they may or may not be used. Prioritize quality over quantity.
-Each joke: max 16 words, punchline at the end, one sentence only.
+Each joke: max 20 words, punchline at the end, one sentence only.
 Score each joke honestly (score field). 8+ means "would interrupt the show to tell this."
 Can include a callback if context supports it.
 
-BACKGROUND RULE: Do NOT reference background items (furniture, decor, posters, room details) unless
-BOTH "city:" AND "hometown:" tags appear in the CONVERSATION SO FAR. Without full location context,
-focus on appearance, clothing, expression, or conversation facts.
+BACKGROUND RULE:
+- NEVER joke about specific background objects (a bookshelf, a poster, a lamp, furniture, etc.)
+- You MAY joke about the overall inferred LOCATION if multiple background elements clearly point to a
+  single place — office, bedroom, café, bus, gym, etc. Joke about being THERE, not the objects in it.
+- Example OK: "You're clearly calling from a home office, which is just unemployment with better lighting."
+- Example NOT OK: "Nice bookshelf." or "I see a poster on your wall."
 
 Set "relevant": true.
 Generate 2-3 jokes.`,

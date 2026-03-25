@@ -224,6 +224,16 @@ export class ComedianBrain {
     return this.micMode !== "off";
   }
 
+  /**
+   * Called by LiveSessionController when the question TTS is nearly done.
+   * Switches mic to listening early so Gemini VAD is ready before the question ends.
+   */
+  activateEarlyListen(): void {
+    if (this.state !== "ask_question" || this.micMode === "listening") return;
+    this.micMode = "listening";
+    this.deps.logTiming("brain: early listen activated");
+  }
+
   setMicAvailable(available: boolean): void {
     this.micAvailable = available;
   }
@@ -773,7 +783,8 @@ export class ComedianBrain {
     }
 
     // Bonus hopper joke — only attach when there are real jokes to accompany it
-    if (this.transitionCount % 2 === 0) {
+    // Skip transitionCount=0 (first delivery) to avoid firing before the hopper is meaningfully populated
+    if (this.transitionCount > 0 && this.transitionCount % 4 === 0) {
       const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
       if (bonus) {
         this.deps.queueSpeak("Oh wait, one more thing—", "emphasis", 0.7);
@@ -804,11 +815,12 @@ export class ComedianBrain {
     const current = this.deps.getObservations();
 
     if (this.cameraAvailable && current.length > 0) {
-      const { isInteresting, changes } = diffObservations(this.previousObservations, current);
+      const oldObservations = [...this.previousObservations];
+      const { isInteresting, changes } = diffObservations(oldObservations, current);
       // Always update baseline — prevents diff accumulation from wording variation
       this.previousObservations = [...current];
       if (isInteresting) {
-        this.enterVisionReact(changes, current);
+        this.enterVisionReact(changes, current, oldObservations);
         return;
       }
     }
@@ -817,7 +829,7 @@ export class ComedianBrain {
     this.enterAskQuestion();
   }
 
-  private enterVisionReact(changes: string[], currentObs: string[]): void {
+  private enterVisionReact(changes: string[], currentObs: string[], oldObs: string[]): void {
     this._transition("vision_react");
     this.deps.setMotion("shocked", 0.8);
     const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
@@ -827,14 +839,13 @@ export class ComedianBrain {
     if (hopperJoke) {
       this.deps.queueSpeak(hopperJoke.text, hopperJoke.motion, hopperJoke.intensity);
       this._addLedger("joke", hopperJoke.text, []);
-      // previousObservations already updated in enterCheckVision
       return;
     }
 
     this._generateJoke({
       context: "vision_react",
       observations: currentObs,
-      previousObservations: this.previousObservations,
+      previousObservations: oldObs,
       imageBase64: frame,
     }).then((response) => {
       if (this.state !== "vision_react") return;

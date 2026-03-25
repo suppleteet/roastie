@@ -125,7 +125,7 @@ interface SessionState {
 const initialState = {
   phase: "idle" as SessionPhase,
   sessionMode: "conversation" as SessionMode,
-  burnIntensity: 3 as BurnIntensity,
+  burnIntensity: 4 as BurnIntensity,
   activePersona: DEFAULT_PERSONA,
   isSpeaking: false,
   isListening: false,

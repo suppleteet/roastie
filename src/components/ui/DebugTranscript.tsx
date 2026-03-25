@@ -13,7 +13,7 @@ function relTime(ts: number, startTs: number | null): string {
  * Fixed to the right side of the screen.
  */
 export default function DebugTranscript() {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [tab, setTab] = useState<"transcript" | "log">("transcript");
   const [debugInput, setDebugInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);

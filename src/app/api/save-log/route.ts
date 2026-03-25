@@ -7,12 +7,12 @@ const MAX_BODY_BYTES = 1_000_000; // 1MB
 
 export async function POST(req: NextRequest) {
   try {
-    const contentLength = Number(req.headers.get("content-length") ?? 0);
-    if (contentLength > MAX_BODY_BYTES) {
+    const rawText = await req.text();
+    if (rawText.length > MAX_BODY_BYTES) {
       return NextResponse.json({ error: "Payload too large" }, { status: 413 });
     }
 
-    const body = await req.json() as {
+    const body = JSON.parse(rawText) as {
       timingLog?: string[];
       transcriptHistory?: { role: string; text: string; ts: number }[];
       sessionStartTs?: number | null;

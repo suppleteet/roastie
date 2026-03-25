@@ -24,8 +24,14 @@ const CANVAS_HEIGHT = PADDING_V + HEADER_HEIGHT + ROWS.length * ROW_HEIGHT + PAD
 
 export default function DebugTimeline() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const phase = useSessionStore((s) => s.phase);
+  const [collapsed, setCollapsed] = useState(phase !== "roasting");
   const [paused, setPaused] = useState(false);
+
+  // Auto-collapse when leaving the roasting phase
+  useEffect(() => {
+    if (phase !== "roasting") setCollapsed(true);
+  }, [phase]);
   const pausedRef = useRef(false);
   const frozenNowRef = useRef<number | null>(null);
 

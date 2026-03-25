@@ -67,7 +67,12 @@ export async function POST(req: NextRequest) {
     return new Response("GEMINI_API_KEY not set", { status: 500 });
   }
 
-  const body = (await req.json()) as GenerateSpeakRequest;
+  let body: GenerateSpeakRequest;
+  try {
+    body = (await req.json()) as GenerateSpeakRequest;
+  } catch {
+    return new Response("Invalid JSON", { status: 400 });
+  }
 
   const personaId: PersonaId = PERSONA_IDS.includes(body.persona as PersonaId)
     ? (body.persona as PersonaId)
