@@ -492,33 +492,17 @@ export default function LiveSessionController({
     useSessionStore.getState().clearConversationEvents();
     useSessionStore.getState().clearTimelineSpans();
     useSessionStore.getState().clearTranscriptHistory();
-    useSessionStore.getState().logTiming("mock: starting");
 
-    const connectSpanId = useSessionStore.getState().beginSpan("session", "mock-connect");
-    await sleep(280);
-    if (!isRunningRef.current) return;
-    useSessionStore.getState().endSpan(connectSpanId);
-    useSessionStore.getState().setIsListening(true);
-    useSessionStore.getState().logTiming("mock: ready");
-
-    geminiWaitingSpanRef.current = useSessionStore.getState().beginSpan("gemini", "processing", "#92400e");
-    await sleep(180 + Math.random() * 120);
-    if (!isRunningRef.current) return;
+    // Start immediately — puppet looks up and talks with no gaps
+    useSessionStore.getState().setActiveMotionState("smug", 0.8);
 
     let lineIdx = 0;
-
-    // Mock mode: puppet looks up at the camera the whole time
-    useSessionStore.getState().setActiveMotionState("smug", 0.8);
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
       if (!isRunningRef.current) break;
 
       const store = useSessionStore.getState();
-      if (geminiWaitingSpanRef.current) {
-        store.endSpan(geminiWaitingSpanRef.current);
-        geminiWaitingSpanRef.current = null;
-      }
       store.setIsSpeaking(true);
 
       const line = MOCK_LINES[lineIdx % MOCK_LINES.length];
@@ -527,28 +511,14 @@ export default function LiveSessionController({
 
       const sentences = line.match(/[^.!?]+[.!?]+\s*/g) ?? [line];
       for (const s of sentences) queueSpeak(s);
+
       // Wait for TTS to finish decoding AND finish playing
       await ttsChainRef.current;
       while (!playback.isQueueEmpty() && isRunningRef.current) await sleep(50);
       if (!isRunningRef.current) break;
 
-      useSessionStore.getState().setIsSpeaking(false);
+      store.setIsSpeaking(false);
       useSessionStore.getState().setActiveMotionState("smug", 0.8);
-
-      await sleep(600 + Math.random() * 400);
-      if (!isRunningRef.current) break;
-
-      userSpeakingSpanRef.current = useSessionStore.getState().beginSpan("user", "speaking");
-      useSessionStore.getState().setIsUserSpeaking(true);
-      await sleep(700 + Math.random() * 600);
-      if (!isRunningRef.current) break;
-
-      useSessionStore.getState().endSpan(userSpeakingSpanRef.current!);
-      userSpeakingSpanRef.current = null;
-      useSessionStore.getState().setIsUserSpeaking(false);
-
-      geminiWaitingSpanRef.current = useSessionStore.getState().beginSpan("gemini", "processing", "#92400e");
-      await sleep(300 + Math.random() * 400);
     }
   }
 
