@@ -11,19 +11,20 @@ export default function ShareScreen() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [savedFolder, setSavedFolder] = useState<string | null>(null);
   const [savedFilename, setSavedFilename] = useState<string | null>(null);
-  const [converting, setConverting] = useState(true);
   const videoRef = useRef<HTMLVideoElement>(null);
   // Prevent double-save (React StrictMode fires effects twice in dev)
   const savedBlobRef = useRef<Blob | null>(null);
 
-  // Upload WebM → server converts to MP4 → fetch MP4 back for playback + sharing.
+  // Show the raw WebM immediately so the first frame appears right away,
+  // then convert in the background and swap to MP4 when ready.
   useEffect(() => {
     if (!recordedBlob || savedBlobRef.current === recordedBlob) return;
     savedBlobRef.current = recordedBlob;
-    setConverting(true);
+
+    // Show first frame immediately
+    setVideoBlob(recordedBlob);
 
     (async () => {
-      let mp4Blob: Blob | null = null;
       let folder: string | null = null;
       let filename: string | null = null;
 
@@ -41,22 +42,21 @@ export default function ShareScreen() {
         if (folder) setSavedFolder(folder);
         if (filename) setSavedFilename(filename);
 
-        // Fetch the converted MP4 back so the client has it for sharing + playback.
+        // Fetch the converted MP4 and silently swap it in (only if not playing).
         if (filename?.endsWith(".mp4")) {
           const serveResp = await fetch(
             `/api/serve-video?filename=${encodeURIComponent(filename)}`,
           );
           if (serveResp.ok) {
-            mp4Blob = await serveResp.blob();
+            const mp4Blob = await serveResp.blob();
+            if (!videoRef.current || videoRef.current.paused) {
+              setVideoBlob(mp4Blob);
+            }
           }
         }
       } catch (e) {
         console.warn("[share] save/fetch failed:", e);
       }
-
-      // Fall back to the raw WebM if conversion failed.
-      setVideoBlob(mp4Blob ?? recordedBlob);
-      setConverting(false);
     })();
   }, [recordedBlob]);
 
@@ -134,58 +134,29 @@ export default function ShareScreen() {
         </button>
 
         <div className="relative aspect-square bg-gray-900 rounded-2xl overflow-hidden">
-          {converting ? (
-            /* Spinner while server converts WebM → MP4 */
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400">
-              <svg
-                className="w-10 h-10 animate-spin text-orange-500"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
+          {/* src set by effect — browser shows first frame before play is clicked */}
+          <video
+            ref={videoRef}
+            className="w-full h-full object-cover"
+            onEnded={() => setPlaying(false)}
+            playsInline
+            preload="auto"
+          />
+          {!playing && videoUrl && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+              <button
+                onClick={handlePlayback}
+                className="w-16 h-16 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-3xl transition-all"
               >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8v8H4z"
-                />
-              </svg>
-              <span className="text-sm">Processing video…</span>
+                ▶
+              </button>
             </div>
-          ) : (
-            <>
-              {/* src set by effect above — browser shows first frame before play is clicked */}
-              <video
-                ref={videoRef}
-                className="w-full h-full object-cover"
-                onEnded={() => setPlaying(false)}
-                playsInline
-                preload="auto"
-              />
-              {!playing && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                  <button
-                    onClick={handlePlayback}
-                    className="w-16 h-16 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-3xl transition-all"
-                  >
-                    ▶
-                  </button>
-                </div>
-              )}
-            </>
           )}
         </div>
       </div>
 
       <div className="flex gap-3 mb-8 flex-wrap justify-center">
-        {!converting && typeof navigator !== "undefined" && "share" in navigator && (
+        {typeof navigator !== "undefined" && "share" in navigator && videoBlob && (
           <button
             onClick={handleShare}
             className="px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all"
@@ -193,7 +164,7 @@ export default function ShareScreen() {
             Share
           </button>
         )}
-        {!converting && (
+        {videoBlob && (
           <button
             onClick={handleDownload}
             className="px-6 py-3 bg-gray-700 hover:bg-gray-600 rounded-xl font-bold transition-all"
