@@ -272,7 +272,7 @@ function MainApp() {
   }, [phase]);
 
   return (
-    <main className="relative min-h-screen bg-black flex items-center justify-center">
+    <main className="relative min-h-dvh bg-black flex items-center justify-center">
       {/* Debug / mock toggles — dev only */}
       {IS_DEV && (
         <div className="absolute top-3 right-3 z-50 flex items-center gap-3 text-white/50 text-xs select-none">

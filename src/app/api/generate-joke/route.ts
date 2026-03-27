@@ -33,6 +33,7 @@ export interface GenerateJokeRequest {
   context: JokeContext;
   persona: PersonaId;
   burnIntensity: BurnIntensity;
+  contentMode?: "clean" | "vulgar";
   question?: string;
   userAnswer?: string;
   /** Filler the puppet already spoke while generating — don't open the joke by repeating it */
@@ -61,10 +62,12 @@ export async function POST(req: NextRequest) {
       ? body.burnIntensity
       : 3;
 
+    const contentMode = body.contentMode === "vulgar" ? "vulgar" : "clean";
     const systemPrompt = getJokePrompt(
       body.context ?? "hopper",
       personaId,
       burnIntensity,
+      contentMode,
     );
 
     const ai = new GoogleGenAI({ apiKey });

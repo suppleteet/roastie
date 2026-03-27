@@ -2,6 +2,8 @@
 import { useRef, useState, useEffect } from "react";
 import { useSessionStore } from "@/store/useSessionStore";
 
+const IS_DEV = process.env.NODE_ENV !== "production";
+
 export default function ShareScreen() {
   const recordedBlob = useSessionStore((s) => s.recordedBlob);
   const reset = useSessionStore((s) => s.reset);
@@ -9,7 +11,7 @@ export default function ShareScreen() {
   // Starts as raw WebM for immediate first-frame display; swapped to MP4 when ready.
   const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  // The final MP4 blob — null while converting.
+  // The converted MP4 blob — null if server lacks ffmpeg (falls back to WebM for share/download).
   const [mp4Blob, setMp4Blob] = useState<Blob | null>(null);
   const [converting, setConverting] = useState(false);
   const [savedFolder, setSavedFolder] = useState<string | null>(null);
@@ -90,18 +92,22 @@ export default function ShareScreen() {
   }
 
   async function handleShare() {
-    if (!mp4Blob) return;
-    const name = savedFilename ?? "roastie.mp4";
-    const file = new File([mp4Blob], name, { type: "video/mp4" });
+    const blob = mp4Blob ?? videoBlob;
+    if (!blob) return;
+    const isMp4 = blob.type === "video/mp4";
+    const name = isMp4 ? (savedFilename ?? "roastie.mp4") : "roastie.webm";
+    const file = new File([blob], name, { type: blob.type });
     if (navigator.canShare?.({ files: [file] })) {
       await navigator.share({ files: [file], title: "Roastie" });
     }
   }
 
   function handleDownload() {
-    if (!mp4Blob) return;
-    const name = savedFilename ?? "roastie.mp4";
-    const url = URL.createObjectURL(mp4Blob);
+    const blob = mp4Blob ?? videoBlob;
+    if (!blob) return;
+    const isMp4 = blob.type === "video/mp4";
+    const name = isMp4 ? (savedFilename ?? "roastie.mp4") : "roastie.webm";
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = name;
@@ -115,27 +121,30 @@ export default function ShareScreen() {
     );
   }
 
-  const buttonsDisabled = converting || !mp4Blob;
+  // Disabled only while uploading/converting — if MP4 failed, WebM is used as fallback.
+  const buttonsDisabled = converting || !videoBlob;
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white px-6 text-center">
+    <div className="flex flex-col items-center justify-center min-h-dvh bg-black text-white px-6 text-center">
 
-      {/* Video frame with folder button above top-right */}
+      {/* Video frame — folder button shown only in dev */}
       <div className="relative w-full max-w-sm mb-6">
-        <button
-          onClick={handleOpenFolder}
-          title={savedFolder ?? "Open videos folder"}
-          className="absolute -top-8 right-0 p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all text-white/60 hover:text-white/90"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            className="w-5 h-5"
+        {IS_DEV && (
+          <button
+            onClick={handleOpenFolder}
+            title={savedFolder ?? "Open videos folder"}
+            className="absolute -top-8 right-0 p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all text-white/60 hover:text-white/90"
           >
-            <path d="M2 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
-          </svg>
-        </button>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              className="w-5 h-5"
+            >
+              <path d="M2 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+            </svg>
+          </button>
+        )}
 
         <div className="relative aspect-square bg-gray-900 rounded-2xl overflow-hidden">
           {/* src set by effect — browser shows first frame before play is clicked */}

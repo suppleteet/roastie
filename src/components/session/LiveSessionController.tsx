@@ -611,6 +611,7 @@ export default function LiveSessionController({
       captureFrame: () => webcamRef.current?.captureFrame() ?? undefined,
       getPersona: () => useSessionStore.getState().activePersona,
       getBurnIntensity: () => useSessionStore.getState().burnIntensity,
+      getContentMode: () => useSessionStore.getState().contentMode,
       getObservations: () => useSessionStore.getState().observations,
       setBrainState: (s) => useSessionStore.getState().setBrainState(s),
       setCurrentQuestion: (q) => useSessionStore.getState().setCurrentQuestion(q),

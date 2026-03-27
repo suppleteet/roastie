@@ -38,10 +38,17 @@ export const GLOBAL_AVOID_TOPICS: string[] = [
  * Merge global avoid topics with a persona's optional specific list.
  * Returns a formatted string ready to inject into a system prompt section.
  */
-export function getAvoidTopicsBlock(personaAvoidTopics?: string[]): string {
+export function getAvoidTopicsBlock(personaAvoidTopics?: string[], contentMode?: "clean" | "vulgar"): string {
   const all = [
     ...GLOBAL_AVOID_TOPICS,
     ...(personaAvoidTopics ?? []),
   ];
+  if (contentMode === "clean") {
+    all.push(
+      "All profanity, swearing, and crude language — keep it completely PG",
+      "Sexual references, innuendo, or body humor",
+      "Drug or alcohol references",
+    );
+  }
   return all.map((t) => `- ${t}`).join("\n");
 }

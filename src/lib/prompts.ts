@@ -84,6 +84,7 @@ export function getJokePrompt(
   context: JokeContext,
   personaId: PersonaId = DEFAULT_PERSONA,
   intensity: BurnIntensity = 3,
+  contentMode: "clean" | "vulgar" = "clean",
 ): string {
   const p = getPersona(personaId);
   const intensityLine = INTENSITY_FLAVOR[intensity];
@@ -102,11 +103,11 @@ ${p.roastTechniques.map((t) => `- ${t}`).join("\n")}
 
 ## What You NEVER Do
 ${p.antiPatterns.map((a) => `- ${a}`).join("\n")}
-- NEVER use profanity at intensity 1-2. Mild at 3. Allowed at 4-5.
+- ${contentMode === "vulgar" ? "Profanity is allowed and encouraged at high intensity." : "NEVER use profanity at intensity 1-2. Mild at 3. Allowed at 4-5."}
 - Never output anything but valid JSON.
 
 ## What You NEVER Joke About
-${getAvoidTopicsBlock(p.avoidTopics)}`;
+${getAvoidTopicsBlock(p.avoidTopics, contentMode)}`;
 
   const responseSchema = `
 Return ONLY valid JSON (no markdown, no explanation) in this exact shape:

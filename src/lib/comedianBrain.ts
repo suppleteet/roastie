@@ -46,6 +46,7 @@ export interface ComedianBrainDeps {
   captureFrame: () => string | undefined;
   getPersona: () => PersonaId;
   getBurnIntensity: () => BurnIntensity;
+  getContentMode: () => "clean" | "vulgar";
   getObservations: () => string[];
   setBrainState: (state: BrainState | null) => void;
   setCurrentQuestion: (q: string | null) => void;
@@ -1081,6 +1082,7 @@ export class ComedianBrain {
         ...params,
         persona: this.deps.getPersona(),
         burnIntensity: this.deps.getBurnIntensity(),
+        contentMode: this.deps.getContentMode(),
       }),
     })
       .then(async (resp) => {
@@ -1159,6 +1161,7 @@ export class ComedianBrain {
           ...params,
           persona: this.deps.getPersona(),
           burnIntensity: this.deps.getBurnIntensity(),
+          contentMode: this.deps.getContentMode(),
         }),
         signal,
       });

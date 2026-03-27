@@ -4,6 +4,8 @@ import type { BurnIntensity } from "@/lib/prompts";
 import { DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 import type { BrainState } from "@/lib/comedianBrainConfig";
 
+export type ContentMode = "clean" | "vulgar";
+
 export type ConversationEventType = "user-start" | "user-end" | "ai-speech" | "ai-done" | "interrupted" | "listening" | "rotate" | "user-laugh";
 
 export type TimelineRow = "user" | "gemini" | "tts" | "vision" | "session";
@@ -51,6 +53,7 @@ interface SessionState {
   phase: SessionPhase;
   sessionMode: SessionMode;
   burnIntensity: BurnIntensity;
+  contentMode: ContentMode;
   activePersona: PersonaId;
   isSpeaking: boolean;
   isListening: boolean;
@@ -91,6 +94,7 @@ interface SessionState {
   setPhase: (phase: SessionPhase) => void;
   setSessionMode: (mode: SessionMode) => void;
   setBurnIntensity: (intensity: BurnIntensity) => void;
+  setContentMode: (mode: ContentMode) => void;
   setActivePersona: (persona: PersonaId) => void;
   setIsSpeaking: (speaking: boolean) => void;
   setIsListening: (listening: boolean) => void;
@@ -126,6 +130,7 @@ const initialState = {
   phase: "idle" as SessionPhase,
   sessionMode: "conversation" as SessionMode,
   burnIntensity: 5 as BurnIntensity,
+  contentMode: "clean" as ContentMode,
   activePersona: DEFAULT_PERSONA,
   isSpeaking: false,
   isListening: false,
@@ -159,6 +164,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setPhase: (phase) => set({ phase }),
   setSessionMode: (sessionMode) => set({ sessionMode }),
   setBurnIntensity: (burnIntensity) => set({ burnIntensity }),
+  setContentMode: (contentMode) => set({ contentMode }),
   setActivePersona: (activePersona) => set({ activePersona }),
   setIsSpeaking: (isSpeaking) => set({ isSpeaking }),
   setIsListening: (isListening) => set({ isListening }),

@@ -53,6 +53,7 @@ export interface GenerateSpeakRequest {
   context: JokeContext;
   persona?: PersonaId;
   burnIntensity?: BurnIntensity;
+  contentMode?: "clean" | "vulgar";
   question?: string;
   userAnswer?: string;
   /** Filler the puppet already spoke while generating — don't open the joke by repeating it */
@@ -85,7 +86,8 @@ export async function POST(req: NextRequest) {
     ? (body.burnIntensity as BurnIntensity)
     : 3;
 
-  const systemPrompt = getJokePrompt(body.context ?? "answer_roast", personaId, burnIntensity);
+  const contentMode = body.contentMode === "vulgar" ? "vulgar" : "clean";
+  const systemPrompt = getJokePrompt(body.context ?? "answer_roast", personaId, burnIntensity, contentMode);
 
   const userParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> =
     [];

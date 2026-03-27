@@ -45,6 +45,7 @@ function makeDeps(overrides?: Partial<ComedianBrainDeps>): ComedianBrainDeps {
     captureFrame: vi.fn().mockReturnValue(undefined),
     getPersona: vi.fn().mockReturnValue("kvetch"),
     getBurnIntensity: vi.fn().mockReturnValue(3),
+    getContentMode: vi.fn().mockReturnValue("clean"),
     getObservations: vi.fn().mockReturnValue([]),
     setBrainState: vi.fn(),
     setCurrentQuestion: vi.fn(),
