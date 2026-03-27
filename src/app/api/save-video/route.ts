@@ -32,15 +32,16 @@ function convertToMp4(inputPath: string, outputPath: string): Promise<void> {
     const proc = spawn("ffmpeg", [
       "-y",
       "-i", inputPath,
-      "-r", "30",             // browser WebM has VFR timestamps → force constant 30fps (matches captureStream(30))
+      "-r", "30",
       "-c:v", "libx264",
-      "-profile:v", "baseline", // widest compatibility (WMP, older devices, iOS Safari)
+      "-profile:v", "main",
       "-level", "3.1",
       "-preset", "fast",
       "-crf", "23",
       "-pix_fmt", "yuv420p",
       "-c:a", "aac",
       "-movflags", "+faststart",
+      "-brand", "mp42",       // WMP requires mp42 brand (rejects default isom)
       outputPath,
     ], { shell: true });
 
