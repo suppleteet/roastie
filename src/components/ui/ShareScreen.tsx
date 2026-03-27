@@ -6,9 +6,12 @@ export default function ShareScreen() {
   const recordedBlob = useSessionStore((s) => s.recordedBlob);
   const reset = useSessionStore((s) => s.reset);
   const [playing, setPlaying] = useState(false);
-  // The playback blob — MP4 from server if conversion succeeded, raw WebM otherwise.
+  // Starts as raw WebM for immediate first-frame display; swapped to MP4 when ready.
   const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  // The final MP4 blob — null while converting.
+  const [mp4Blob, setMp4Blob] = useState<Blob | null>(null);
+  const [converting, setConverting] = useState(false);
   const [savedFolder, setSavedFolder] = useState<string | null>(null);
   const [savedFilename, setSavedFilename] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -16,13 +19,13 @@ export default function ShareScreen() {
   const savedBlobRef = useRef<Blob | null>(null);
 
   // Show the raw WebM immediately so the first frame appears right away,
-  // then convert in the background and swap to MP4 when ready.
+  // then convert in the background and enable Share/Download when MP4 is ready.
   useEffect(() => {
     if (!recordedBlob || savedBlobRef.current === recordedBlob) return;
     savedBlobRef.current = recordedBlob;
 
-    // Show first frame immediately
     setVideoBlob(recordedBlob);
+    setConverting(true);
 
     (async () => {
       let folder: string | null = null;
@@ -42,20 +45,23 @@ export default function ShareScreen() {
         if (folder) setSavedFolder(folder);
         if (filename) setSavedFilename(filename);
 
-        // Fetch the converted MP4 and silently swap it in (only if not playing).
         if (filename?.endsWith(".mp4")) {
           const serveResp = await fetch(
             `/api/serve-video?filename=${encodeURIComponent(filename)}`,
           );
           if (serveResp.ok) {
-            const mp4Blob = await serveResp.blob();
+            const converted = await serveResp.blob();
+            setMp4Blob(converted);
+            // Swap video src to MP4 if not currently playing
             if (!videoRef.current || videoRef.current.paused) {
-              setVideoBlob(mp4Blob);
+              setVideoBlob(converted);
             }
           }
         }
       } catch (e) {
         console.warn("[share] save/fetch failed:", e);
+      } finally {
+        setConverting(false);
       }
     })();
   }, [recordedBlob]);
@@ -79,32 +85,28 @@ export default function ShareScreen() {
   function handlePlayback() {
     const video = videoRef.current;
     if (!video) return;
-    // src is already set by the effect above; just play.
     video.play();
     setPlaying(true);
   }
 
   async function handleShare() {
-    if (!videoBlob) return;
-    const isMp4 = videoBlob.type === "video/mp4";
-    const name = isMp4 ? "roastie.mp4" : "roastie.webm";
-    const file = new File([videoBlob], name, { type: videoBlob.type });
+    if (!mp4Blob) return;
+    const name = savedFilename ?? "roastie.mp4";
+    const file = new File([mp4Blob], name, { type: "video/mp4" });
     if (navigator.canShare?.({ files: [file] })) {
       await navigator.share({ files: [file], title: "Roastie" });
     }
   }
 
   function handleDownload() {
-    if (!videoUrl || !videoBlob) return;
-    const isMp4 = videoBlob.type === "video/mp4";
-    const ext = isMp4 ? ".mp4" : ".webm";
-    const name = savedFilename
-      ? savedFilename.replace(/\.\w+$/, ext)
-      : `roastie${ext}`;
+    if (!mp4Blob) return;
+    const name = savedFilename ?? "roastie.mp4";
+    const url = URL.createObjectURL(mp4Blob);
     const a = document.createElement("a");
-    a.href = videoUrl;
+    a.href = url;
     a.download = name;
     a.click();
+    URL.revokeObjectURL(url);
   }
 
   function handleOpenFolder() {
@@ -112,6 +114,8 @@ export default function ShareScreen() {
       console.warn("[open-folder] failed:", e),
     );
   }
+
+  const buttonsDisabled = converting || !mp4Blob;
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white px-6 text-center">
@@ -155,24 +159,29 @@ export default function ShareScreen() {
         </div>
       </div>
 
-      <div className="flex gap-3 mb-8 flex-wrap justify-center">
-        {typeof navigator !== "undefined" && "share" in navigator && videoBlob && (
+      <div className="flex gap-3 mb-3 flex-wrap justify-center">
+        {typeof navigator !== "undefined" && "share" in navigator && (
           <button
             onClick={handleShare}
-            className="px-6 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all"
+            disabled={buttonsDisabled}
+            className="px-6 py-3 bg-blue-600 rounded-xl font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-500 disabled:hover:bg-blue-600"
           >
             Share
           </button>
         )}
-        {videoBlob && (
-          <button
-            onClick={handleDownload}
-            className="px-6 py-3 bg-gray-700 hover:bg-gray-600 rounded-xl font-bold transition-all"
-          >
-            Download
-          </button>
-        )}
+        <button
+          onClick={handleDownload}
+          disabled={buttonsDisabled}
+          className="px-6 py-3 bg-gray-700 rounded-xl font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-600 disabled:hover:bg-gray-700"
+        >
+          Download
+        </button>
       </div>
+
+      {converting && (
+        <p className="text-xs text-gray-500 mb-6">Processing video…</p>
+      )}
+      {!converting && <div className="mb-6" />}
 
       <button onClick={reset} className="text-gray-500 hover:text-gray-300 text-sm">
         ← Roast again
