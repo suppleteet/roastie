@@ -47,7 +47,7 @@ export function streamElTts({
   }
 
   const vid = voiceId ?? process.env.ELEVENLABS_VOICE_ID ?? ELEVENLABS_VOICE_ID;
-  const url = `wss://api.elevenlabs.io/v1/text-to-speech/${vid}/stream-input?model_id=${EL_MODEL_ID}&output_format=${EL_OUTPUT_FORMAT}`;
+  const url = `wss://api.elevenlabs.io/v1/text-to-speech/${vid}/stream-input?model_id=${EL_MODEL_ID}&output_format=${EL_OUTPUT_FORMAT}&xi-api-key=${apiKey}`;
 
   const ws = new WebSocket(url);
   let closed = false;

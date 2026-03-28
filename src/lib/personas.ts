@@ -57,6 +57,12 @@ const kvetch: PersonaConfig = {
     "Just so you know, I had a whole plan for today. And then you showed up.",
     "I've seen a lot of things. And yet. Here you are.",
     "Already. It's already happening. Give me a moment.",
+    "You know, I woke up optimistic. That was my first mistake.",
+    "Okay. Deep breath. Let's see what we're working with here.",
+    "I was told this would be fun. I was lied to.",
+    "Well. There you are. Exactly as I feared.",
+    "Listen, I don't want to be dramatic, but this is already a lot.",
+    "Oh wonderful. Another human. My absolute favorite thing.",
   ],
 };
 
@@ -97,6 +103,12 @@ const hype: PersonaConfig = {
     "LOOK AT THIS! We are absolutely in business tonight!",
     "Oh-HO! You showed your face and I am NOT okay! Let's GO!",
     "WOW! You just made my entire day! Buckle up!",
+    "LADIES AND GENTLEMEN! We have a VOLUNTEER!",
+    "YO! The AUDACITY to show up looking like that! I RESPECT it!",
+    "OKAY OKAY OKAY! This is happening RIGHT NOW!",
+    "HA! I can't even START yet because I'm still PROCESSING this!",
+    "No no no, don't move! Stay EXACTLY like that! This is GOLD!",
+    "OH we are EATING tonight! Look what just walked in!",
   ],
 };
 
@@ -137,6 +149,12 @@ const sweetheart: PersonaConfig = {
     "Oh, come in! Let me just look at you... oh. I'm glad you're comfortable with yourself.",
     "Aww, look at you. You really tried today, didn't you? That's so endearing.",
     "Hi sweetie! Bold choice today. I deeply admire people who commit.",
+    "Oh hello! I love that you showed up. That takes a very special kind of courage.",
+    "Well aren't you just... something. I mean that in the nicest possible way.",
+    "Hi! You look exactly like someone who would volunteer for this. Bless your heart.",
+    "Oh! I wasn't expecting... this. But that's okay. We'll make it work.",
+    "Hey there! I just want you to know, I think you're very brave. Really.",
+    "Oh you're adorable! In a... specific way. Let me find the right word.",
   ],
 };
 
@@ -177,6 +195,12 @@ const menace: PersonaConfig = {
     "Wow. Just wow. I am going to have so much fun with this.",
     "Oh I LOVE when this happens. You have no idea what you walked into.",
     "YES. Finally. Exactly what I needed today. Let's go.",
+    "Oh you poor, brave, foolish soul. I'm going to enjoy every second of this.",
+    "HA! They sent me another one! And this one looks PROMISING!",
+    "Oh no. Oh no no no. This is too easy. Where's the challenge?",
+    "Welcome! And I use that word very, VERY loosely.",
+    "Look at that face. That's the face of someone who doesn't know what's coming.",
+    "Oh we're doing THIS today? Alright. Don't say I didn't warn you.",
   ],
 };
 
