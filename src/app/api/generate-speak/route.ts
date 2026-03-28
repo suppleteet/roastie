@@ -5,13 +5,9 @@ import { getJokePrompt } from "@/lib/prompts";
 import { PERSONA_IDS, DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 import type { BurnIntensity } from "@/lib/prompts";
 import type { JokeContext, JokeItem, JokeResponse } from "@/app/api/generate-joke/route";
-import { streamElTtsAsync } from "@/lib/elTtsStream";
 
 type StreamEvent =
-  | { type: "tts_inline"; enabled: boolean }
   | { type: "joke"; text: string; motion: string; intensity: number; score: number }
-  | { type: "audio"; chunk: string; jokeIdx: number }
-  | { type: "audio_done"; jokeIdx: number }
   | {
       type: "meta";
       relevant: boolean;
@@ -119,17 +115,10 @@ export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
 
   // Check if ElevenLabs API key is available for inline TTS
-  const elApiKey = process.env.ELEVENLABS_API_KEY;
-
   const stream = new ReadableStream({
     async start(controller) {
       let accumulated = "";
       let jokesEmitted = 0;
-      // Track in-flight TTS promises so we wait for all audio before closing
-      const ttsPromises: Promise<void>[] = [];
-
-      // Tell the client up-front whether inline TTS audio will be interleaved
-      controller.enqueue(encoder.encode(sse({ type: "tts_inline", enabled: !!elApiKey })));
 
       try {
         const geminiStream = await ai.models.generateContentStream({
@@ -146,34 +135,11 @@ export async function POST(req: NextRequest) {
           if (!chunkText) continue;
           accumulated += chunkText;
 
-          // Emit any newly completed joke objects + pipe to TTS
+          // Emit any newly completed joke objects as they stream
           const newJokes = extractNewJokes(accumulated, jokesEmitted);
           for (const joke of newJokes) {
-            const jokeIdx = jokesEmitted;
             controller.enqueue(encoder.encode(sse({ type: "joke", ...joke })));
             jokesEmitted++;
-
-            // Pipe joke text directly to ElevenLabs WebSocket TTS
-            if (elApiKey) {
-              const ttsPromise = streamElTtsAsync(
-                joke.text,
-                (base64Pcm) => {
-                  controller.enqueue(
-                    encoder.encode(sse({ type: "audio", chunk: base64Pcm, jokeIdx })),
-                  );
-                },
-              ).then(() => {
-                controller.enqueue(
-                  encoder.encode(sse({ type: "audio_done", jokeIdx })),
-                );
-              }).catch((err) => {
-                console.error(`[generate-speak] TTS error for joke ${jokeIdx}:`, err);
-                controller.enqueue(
-                  encoder.encode(sse({ type: "audio_done", jokeIdx })),
-                );
-              });
-              ttsPromises.push(ttsPromise);
-            }
           }
         }
 
@@ -188,30 +154,8 @@ export async function POST(req: NextRequest) {
               jokesEmitted,
             );
             for (const joke of remainingJokes) {
-              const jokeIdx = jokesEmitted;
               controller.enqueue(encoder.encode(sse({ type: "joke", ...joke })));
               jokesEmitted++;
-
-              if (elApiKey) {
-                const ttsPromise = streamElTtsAsync(
-                  joke.text,
-                  (base64Pcm) => {
-                    controller.enqueue(
-                      encoder.encode(sse({ type: "audio", chunk: base64Pcm, jokeIdx })),
-                    );
-                  },
-                ).then(() => {
-                  controller.enqueue(
-                    encoder.encode(sse({ type: "audio_done", jokeIdx })),
-                  );
-                }).catch((err) => {
-                  console.error(`[generate-speak] TTS error for joke ${jokeIdx}:`, err);
-                  controller.enqueue(
-                    encoder.encode(sse({ type: "audio_done", jokeIdx })),
-                  );
-                });
-                ttsPromises.push(ttsPromise);
-              }
             }
 
             // Emit meta
@@ -237,9 +181,6 @@ export async function POST(req: NextRequest) {
         console.error("[generate-speak]", e);
         controller.enqueue(encoder.encode(sse({ type: "meta", relevant: true })));
       }
-
-      // Wait for all TTS streams to finish before closing
-      await Promise.allSettled(ttsPromises);
 
       controller.enqueue(encoder.encode(sse({ type: "done" })));
       controller.close();

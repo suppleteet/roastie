@@ -129,31 +129,15 @@ export default function LiveSessionController({
     wasDrainedRef.current = false; // reset edge so drain detection fires when this plays through
     const gen = ttsGenerationRef.current;
 
-    // Stream TTS via WebSocket endpoint — audio plays as chunks arrive
+    // Fire TTS fetch NOW — doesn't wait for previous joke to finish fetching
+    const audioPromise = prefetchTts(text.trim(), gen);
+
     ttsChainRef.current = ttsChainRef.current.then(async () => {
       if (ttsGenerationRef.current !== gen || !isRunningRef.current) return;
+      // Motion fires when THIS joke is about to play (not at queue time)
       if (motion) useSessionStore.getState().setActiveMotionState(motion, intensity ?? 0.7);
-      await streamTtsWs(text.trim(), gen);
+      await scheduleFromPrefetch(audioPromise, gen);
     });
-  }
-
-  /** Enqueue inline audio from generate-speak SSE (no separate TTS fetch needed). */
-  function enqueueInlineAudio(base64Pcm: string): void {
-    if (!isRunningRef.current) return;
-    wasDrainedRef.current = false;
-    playback.enqueueChunk(base64Pcm);
-    // Track TTFS on first inline audio chunk
-    if (!firstSpeechRecordedRef.current && kickoffTimeRef.current !== null) {
-      firstSpeechRecordedRef.current = true;
-      const ttfs = Date.now() - kickoffTimeRef.current;
-      useSessionStore.getState().setTimeToFirstSpeechMs(ttfs);
-      useSessionStore.getState().logTiming(`brain: TTFS ${ttfs}ms`);
-      useSessionStore.getState().setHasSpokenThisSession(true);
-      if (!mockMode && videoRecorderRef.current && compositorStream && isRunningRef.current) {
-        videoRecorderRef.current.start(compositorStream, getRecordingAudioStream());
-      }
-    }
-    useSessionStore.getState().setIsSpeaking(true);
   }
 
   function cancelSpeech(): void {
@@ -163,66 +147,65 @@ export default function LiveSessionController({
     useSessionStore.getState().setIsSpeaking(false);
   }
 
-  // ─── TTS pipeline (WebSocket streaming) ──────────────────────────────────────
+  // ─── TTS pipeline ─────────────────────────────────────────────────────────────
 
-  /**
-   * Stream TTS via /api/tts-ws — audio plays chunk-by-chunk as it arrives.
-   * Replaces the old prefetchTts + scheduleFromPrefetch pattern.
-   */
-  async function streamTtsWs(text: string, gen: number): Promise<void> {
-    if (!isRunningRef.current) return;
-    const ttsSpanId = useSessionStore.getState().beginSpan("tts", text.slice(0, 22));
+  async function prefetchTts(text: string, gen: number): Promise<ArrayBuffer | null> {
+    if (!isRunningRef.current) return null;
     try {
-      const resp = await fetch("/api/tts-ws", {
+      const ttsSpanId = useSessionStore.getState().beginSpan("tts", text.slice(0, 22));
+      // Snapshot current IDs — concurrent prefetches may share the same previous IDs, that's OK
+      const previousRequestIds = [...ttsRequestIdsRef.current];
+      const resp = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({
+          text,
+          ...(previousRequestIds.length > 0 ? { previousRequestIds } : {}),
+        }),
       });
       useSessionStore.getState().endSpan(ttsSpanId);
-      if (!resp.ok || !resp.body || ttsGenerationRef.current !== gen) return;
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (ttsGenerationRef.current !== gen) { reader.cancel(); return; }
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6)) as { type: string; chunk?: string };
-            if (event.type === "audio" && event.chunk) {
-              playback.enqueueChunk(event.chunk);
-              // TTFS tracking
-              if (!firstSpeechRecordedRef.current && kickoffTimeRef.current !== null) {
-                firstSpeechRecordedRef.current = true;
-                const ttfs = Date.now() - kickoffTimeRef.current;
-                useSessionStore.getState().setTimeToFirstSpeechMs(ttfs);
-                useSessionStore.getState().logTiming(`brain: TTFS ${ttfs}ms`);
-                useSessionStore.getState().setHasSpokenThisSession(true);
-                if (!mockMode && videoRecorderRef.current && compositorStream && isRunningRef.current) {
-                  videoRecorderRef.current.start(compositorStream, getRecordingAudioStream());
-                }
-              }
-              useSessionStore.getState().setIsSpeaking(true);
-            }
-          } catch { /* malformed SSE line */ }
-        }
+      if (!resp.ok || ttsGenerationRef.current !== gen) return null;
+      // Capture request-id for continuity on the next call
+      const requestId = resp.headers.get("x-request-id");
+      if (requestId) {
+        ttsRequestIdsRef.current = [...ttsRequestIdsRef.current, requestId].slice(-3);
       }
+      return resp.arrayBuffer();
     } catch (e) {
-      useSessionStore.getState().endSpan(ttsSpanId);
       if ((e as Error).name !== "AbortError") {
-        console.error("[live] TTS-WS stream error:", e);
+        console.error("[live] TTS prefetch error:", e);
+      }
+      return null;
+    }
+  }
+
+  async function scheduleFromPrefetch(
+    audioPromise: Promise<ArrayBuffer | null>,
+    gen: number,
+  ): Promise<void> {
+    const ab = await audioPromise;
+    if (!ab || !isRunningRef.current || ttsGenerationRef.current !== gen) return;
+
+    await playback.decodeAndEnqueue(ab);
+
+    if (ttsGenerationRef.current !== gen) {
+      playback.flush();
+      return;
+    }
+
+    // TTFS — first audio scheduled
+    if (!firstSpeechRecordedRef.current && kickoffTimeRef.current !== null) {
+      firstSpeechRecordedRef.current = true;
+      const ttfs = Date.now() - kickoffTimeRef.current;
+      useSessionStore.getState().setTimeToFirstSpeechMs(ttfs);
+      useSessionStore.getState().logTiming(`brain: TTFS ${ttfs}ms`);
+      useSessionStore.getState().setHasSpokenThisSession(true);
+      // Start recording now that the puppet is about to speak for the first time.
+      if (!mockMode && videoRecorderRef.current && compositorStream && isRunningRef.current) {
+        videoRecorderRef.current.start(compositorStream, getRecordingAudioStream());
       }
     }
+    useSessionStore.getState().setIsSpeaking(true);
   }
 
   // ─── TTS drain detection via rAF ─────────────────────────────────────────────
@@ -539,6 +522,7 @@ export default function LiveSessionController({
     ttsChainRef.current = Promise.resolve();
     ttsGenerationRef.current++;
     ttsRequestIdsRef.current = [];
+
     userSpeakingSpanRef.current = null;
     geminiWaitingSpanRef.current = null;
     useSessionStore.getState().clearConversationEvents();
@@ -611,6 +595,7 @@ export default function LiveSessionController({
     ttsChainRef.current = Promise.resolve();
     ttsGenerationRef.current++; // increment (not reset) — invalidates any in-flight TTS from prior session
     ttsRequestIdsRef.current = [];
+
     userSpeakingSpanRef.current = null;
     geminiWaitingSpanRef.current = null;
     firstSpeechRecordedRef.current = false;
@@ -622,11 +607,6 @@ export default function LiveSessionController({
     // Build ComedianBrain
     brainRef.current = new ComedianBrain({
       queueSpeak,
-      enqueueAudioChunk: enqueueInlineAudio,
-      pushTranscript: (text: string) => {
-        useSessionStore.getState().pushTranscriptEntry("puppet", text);
-        wasDrainedRef.current = false;
-      },
       cancelSpeech,
       isQueueEmpty: () => playback.isQueueEmpty(),
       setMotion: (state, intensity) =>
@@ -701,7 +681,7 @@ export default function LiveSessionController({
       useSessionStore.getState().setError(
         `Live session failed: ${(err as Error).message}. Try monologue mode.`,
       );
-      useSessionStore.getState().setPhase("idle");
+      useSessionStore.getState().setPhase("idle", "ERROR");
     }
   }
 
@@ -752,7 +732,7 @@ export default function LiveSessionController({
     // Only navigate to sharing if the user hasn't already moved on (e.g. clicked
     // "Start Session" again before this async stop finished).
     if (useSessionStore.getState().phase === "stopped") {
-      store.setPhase("sharing");
+      store.setPhase("sharing", "SHARE_CLICKED");
     }
 
     // Auto-save transcript for debugging

@@ -84,6 +84,8 @@ export function streamElTts({
       };
 
       if (msg.error) {
+        closed = true;
+        ws.close();
         onError(new Error(`ElevenLabs WS error: ${msg.error}`));
         return;
       }

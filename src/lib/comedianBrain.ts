@@ -40,10 +40,6 @@ export interface LedgerEntry {
 
 export interface ComedianBrainDeps {
   queueSpeak: (text: string, motion?: MotionState, intensity?: number) => void;
-  /** Enqueue raw PCM audio directly into playback (bypasses TTS fetch). */
-  enqueueAudioChunk?: (base64Pcm: string) => void;
-  /** Push text to transcript without triggering TTS (used when audio comes inline). */
-  pushTranscript?: (text: string) => void;
   cancelSpeech: () => void;
   isQueueEmpty: () => boolean;
   setMotion: (state: MotionState, intensity: number) => void;
@@ -129,6 +125,8 @@ export class ComedianBrain {
   private pendingFollowUp: string | null = null;
   private currentQuestion: ComedyQuestion | null = null;
   private answerBuffer = "";
+  /** Incremented each time enterGenerating fires — stale stream callbacks check this to avoid double delivery. */
+  private deliveryGeneration = 0;
   private prodCount = 0;
   private consecutiveSilentQuestions = 0;
   private visionOnlyMode = false;
@@ -273,6 +271,20 @@ export class ComedianBrain {
       this.deps.setUserAnswer(text);
       this._transition("wait_answer");
       // Answer already started — use silence timer, not prod timer
+      this._startAnswerSilenceTimer();
+      return;
+    }
+
+    // Late transcription during generation — user's words are still arriving after VAD fired.
+    // Cancel stale generation, update the answer, and restart after a brief silence window.
+    if (this.state === "generating") {
+      this._clearTimers();
+      this.deps.cancelSpeech();
+      this.answerBuffer = smartJoin(this.answerBuffer, text);
+      this.deps.setUserAnswer(this.answerBuffer);
+      this.deps.logTiming(`brain: late transcription during generating — "${text}" → buffer now "${this.answerBuffer}"`);
+      this._transition("pre_generate");
+      this._cancelSpeculative();
       this._startAnswerSilenceTimer();
       return;
     }
@@ -594,6 +606,7 @@ export class ComedianBrain {
 
   private enterGenerating(answer: string): void {
     this._transition("generating");
+    this.deliveryGeneration++;
     this.deps.setMotion("thinking", 0.7);
     this._addLedger("answer", answer, []);
 
@@ -654,6 +667,7 @@ export class ComedianBrain {
   ): void {
     let jokesQueued = 0;
     let metaHandled = false;
+    const gen = this.deliveryGeneration; // snapshot — stale callbacks check this
 
     this._generateJokeStream(
       {
@@ -665,25 +679,15 @@ export class ComedianBrain {
         imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
       },
       // onJoke — fires immediately as each joke streams in
-      (joke, hasInlineAudio) => {
+      (joke) => {
+        if (this.deliveryGeneration !== gen) return; // stale stream — ignore
         if (this.state !== "generating" && this.state !== "delivering") return;
         if (this.state === "generating") {
           // First joke arrived — transition to delivering now
           this._transition("delivering");
           this.deps.setMotion("energetic", 0.8);
         }
-
-        if (hasInlineAudio) {
-          // Audio is already streaming inline from generate-speak — just record transcript + set motion
-          this.deps.pushTranscript?.(joke.text);
-          this.deps.setMotion(
-            joke.motion as import("@/lib/motionStates").MotionState,
-            joke.intensity,
-          );
-        } else {
-          // No inline audio — fall back to separate TTS fetch via queueSpeak
-          this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
-        }
+        this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
 
         this._addLedger("joke", joke.text, []);
         this.deps.logTiming(`brain: joke[${jokesQueued}] — "${joke.text.slice(0, 60)}"`);
@@ -693,6 +697,7 @@ export class ComedianBrain {
       },
       // onMeta — fires after all jokes stream, with follow-up/redirect/tags/callback
       (meta) => {
+        if (this.deliveryGeneration !== gen) return; // stale stream — ignore
         if (this.state !== "generating" && this.state !== "delivering") return;
         metaHandled = true;
         this.deps.logTiming(`brain: api meta — relevant=${meta.relevant} jokes=${jokesQueued} followUp=${!!meta.followUp} redirect=${!!meta.redirect}`);
@@ -756,6 +761,7 @@ export class ComedianBrain {
       },
       // onError — stream failed, fall back to non-streaming
       () => {
+        if (this.deliveryGeneration !== gen) return; // stale stream
         if (metaHandled) return;
         if (this.state !== "generating") return;
         this.deps.logTiming("brain: stream failed, generating fresh");
@@ -1081,7 +1087,7 @@ export class ComedianBrain {
       conversationSoFar?: string[];
       imageBase64?: string;
     },
-    onJoke: (joke: JokeItem, hasInlineAudio: boolean) => void,
+    onJoke: (joke: JokeItem) => void,
     onMeta: (meta: {
       relevant: boolean;
       followUp?: string;
@@ -1110,7 +1116,6 @@ export class ComedianBrain {
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let inlineAudioEnabled = false; // set by tts_inline event from server
 
         // eslint-disable-next-line no-constant-condition
         while (true) {
@@ -1130,15 +1135,8 @@ export class ComedianBrain {
                 type: string;
                 [key: string]: unknown;
               };
-              if (event.type === "tts_inline") {
-                inlineAudioEnabled = !!(event.enabled);
-              } else if (event.type === "joke") {
-                onJoke(event as unknown as JokeItem, inlineAudioEnabled);
-              } else if (event.type === "audio") {
-                // Guard: only enqueue if brain is still in a delivering state
-                if (this.state === "generating" || this.state === "delivering") {
-                  this.deps.enqueueAudioChunk?.(event.chunk as string);
-                }
+              if (event.type === "joke") {
+                onJoke(event as unknown as JokeItem);
               } else if (event.type === "meta") {
                 onMeta(
                   event as unknown as {
@@ -1150,7 +1148,7 @@ export class ComedianBrain {
                   },
                 );
               }
-              // audio_done is informational — drain detection handles end-of-speech
+              // audio/tts_inline/audio_done events ignored — TTS handled by queueSpeak
             } catch {
               // malformed SSE line
             }
