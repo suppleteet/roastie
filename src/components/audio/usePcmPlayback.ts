@@ -45,6 +45,7 @@ export function usePcmPlayback(): PcmPlaybackHandle {
 
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.3;
       analyserRef.current = analyser;
 
       const dest = ctx.createMediaStreamDestination();

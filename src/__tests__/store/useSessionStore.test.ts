@@ -36,13 +36,27 @@ describe("initial state", () => {
 });
 
 describe("phase transitions", () => {
-  it("setPhase transitions through all valid phases", () => {
+  it("setPhase transitions through a valid phase sequence", () => {
     const { setPhase } = useSessionStore.getState();
-    const phases = ["consent", "requesting-permissions", "roasting", "stopped", "sharing"] as const;
-    for (const phase of phases) {
-      setPhase(phase);
+    const steps: [string, string][] = [
+      ["consent", "START_CLICKED"],
+      ["requesting-permissions", "CONSENT_ACCEPTED"],
+      ["roasting", "PERMISSIONS_GRANTED"],
+      ["stopped", "STOP_CLICKED"],
+      ["sharing", "SHARE_CLICKED"],
+      ["idle", "SHARE_DISMISSED"],
+    ];
+    for (const [phase, trigger] of steps) {
+      setPhase(phase as Parameters<typeof setPhase>[0], trigger as Parameters<typeof setPhase>[1]);
       expect(useSessionStore.getState().phase).toBe(phase);
     }
+  });
+
+  it("rejects invalid transitions silently", () => {
+    const { setPhase } = useSessionStore.getState();
+    // idle → sharing is invalid
+    setPhase("sharing", "SHARE_CLICKED");
+    expect(useSessionStore.getState().phase).toBe("idle");
   });
 });
 
@@ -144,7 +158,10 @@ describe("scene and recording", () => {
 describe("reset", () => {
   it("returns all fields to initial values", () => {
     const store = useSessionStore.getState();
-    store.setPhase("roasting");
+    // Walk through valid transitions to reach roasting
+    store.setPhase("consent", "START_CLICKED");
+    store.setPhase("requesting-permissions", "CONSENT_ACCEPTED");
+    store.setPhase("roasting", "PERMISSIONS_GRANTED");
     store.setSessionMode("monologue");
     store.setBurnIntensity(5);
     store.setIsSpeaking(true);

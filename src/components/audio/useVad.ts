@@ -54,6 +54,9 @@ export function useVad({ onSpeechStart, onSpeechEnd }: VadOptions): VadHandle {
 
       // Silero V5 is the latest/fastest model
       model: "v5",
+      // Serve ONNX model + WASM runtime from public/ to avoid webpack chunking issues
+      baseAssetPath: "/",
+      onnxWASMBasePath: "/",
 
       // Sensitivity tuning — biased toward fast detection
       positiveSpeechThreshold: 0.5,

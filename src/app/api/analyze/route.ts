@@ -29,16 +29,21 @@ export async function POST(req: NextRequest) {
             role: "user",
             parts: [
               { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
-              { text: "List 3-5 short, specific observations about what you see in this image. Return ONLY a JSON array of strings, e.g. [\"wearing headphones\", \"messy hair\"]." },
+              { text: `Return a JSON object with two fields:
+- "person": array of 3-5 short observations (2-5 words each) about the person — expression, mood, posture, actions, accessories.
+- "setting": a short confident guess about where they are based on the background (e.g. "home office", "bedroom", "kitchen", "car", "coffee shop"). If the background is too blurry or generic to tell, use null.
+Example: {"person":["smirking","leaning back","wearing headphones"],"setting":"home office"}
+Keep it compact. Return ONLY the JSON object.` },
             ],
           },
         ],
-        config: { maxOutputTokens: 200 },
+        config: { maxOutputTokens: 500 },
       });
-      const text = response.text ?? "[]";
-      const parsed = extractJson<string[]>(text, /\[[\s\S]*\]/, []);
-      const observations = Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
-      return NextResponse.json({ sentences: [], observations });
+      const text = response.text ?? "{}";
+      const parsed = extractJson<{ person?: string[]; setting?: string | null }>(text, /\{[\s\S]*\}/, {});
+      const observations = Array.isArray(parsed.person) ? parsed.person.filter((s) => typeof s === "string") : [];
+      const setting = typeof parsed.setting === "string" ? parsed.setting : null;
+      return NextResponse.json({ sentences: [], observations, setting });
     }
 
     const systemPrompt =

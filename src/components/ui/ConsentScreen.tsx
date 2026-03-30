@@ -16,7 +16,7 @@ export default function ConsentScreen() {
   const setPhase = useSessionStore((s) => s.setPhase);
 
   function handleReady() {
-    setPhase("requesting-permissions");
+    setPhase("requesting-permissions", "CONSENT_ACCEPTED");
   }
 
   return (
@@ -64,7 +64,7 @@ export default function ConsentScreen() {
       </button>
 
       <button
-        onClick={() => setPhase("idle")}
+        onClick={() => setPhase("idle", "CONSENT_BACK")}
         className="mt-4 text-gray-500 hover:text-gray-300 text-sm"
       >
         ← Back

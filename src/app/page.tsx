@@ -41,8 +41,7 @@ function MainApp() {
   const timeToFirstSpeechMs = useSessionStore((s) => s.timeToFirstSpeechMs);
   const activePersona = useSessionStore((s) => s.activePersona);
   const setActivePersona = useSessionStore((s) => s.setActivePersona);
-  const brainState = useSessionStore((s) => s.brainState);
-  const isThinking = phase === "roasting" && (brainState === "generating" || brainState === "pre_generate");
+  const hasSpokenThisSession = useSessionStore((s) => s.hasSpokenThisSession);
   const lastVisionCallTs = useSessionStore((s) => s.lastVisionCallTs);
   const IS_DEV = process.env.NODE_ENV !== "production";
   const [debugMode, setDebugMode] = useState(IS_DEV);
@@ -67,7 +66,7 @@ function MainApp() {
   // Keep mockModeRef in sync for stale-closure-safe reads in effects
   useEffect(() => { mockModeRef.current = mockMode; }, [mockMode]);
 
-  const handleStartSession = () => { setPhase("requesting-permissions"); };
+  const handleStartSession = () => { setPhase("requesting-permissions", "START_CLICKED"); };
 
   // Capture first frame from a MediaStream and send to vision API immediately
   function preAnalyzeFirstFrame(stream: MediaStream) {
@@ -151,11 +150,11 @@ function MainApp() {
         navigator.mediaDevices.getUserMedia({ audio: true })
           .then((audioStream) => {
             audioStream.getAudioTracks().forEach((t) => webcamStream.addTrack(t));
-            setPhase("roasting");
+            setPhase("roasting", "PERMISSIONS_GRANTED");
           })
-          .catch(() => setPhase("roasting")); // proceed without mic if audio denied
+          .catch(() => setPhase("roasting", "PERMISSIONS_GRANTED")); // proceed without mic if audio denied
       } else {
-        setPhase("roasting");
+        setPhase("roasting", "PERMISSIONS_GRANTED");
       }
       return;
     }
@@ -168,12 +167,12 @@ function MainApp() {
       })
       .then((stream) => {
         setWebcamStream(stream);
-        setPhase("roasting");
+        setPhase("roasting", "PERMISSIONS_GRANTED");
       })
       .catch((err) => {
         console.error("Camera denied:", err.name, err.message);
         setError(`Camera error: ${err.name} — ${err.message}. Please allow camera access and try again.`);
-        setPhase("idle");
+        setPhase("idle", "PERMISSIONS_DENIED");
       });
   }, [phase, sessionMode, webcamStream, setPhase, setError]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -247,7 +246,7 @@ function MainApp() {
 
   function handleDebugToggle(checked: boolean) {
     setDebugMode(checked);
-    if (!checked) { setMockMode(false); mockModeRef.current = false; setPhase("idle"); }
+    if (!checked) { setMockMode(false); mockModeRef.current = false; setPhase("idle", "DEBUG_TOGGLE"); }
   }
 
   function handleMockToggle(checked: boolean) {
@@ -259,7 +258,7 @@ function MainApp() {
     // session is already torn down.
     if (phase === "roasting" || phase === "stopped") {
       pendingMockRestartRef.current = true;
-      setPhase("stopped");
+      setPhase("stopped", "STOP_CLICKED");
     }
   }
 
@@ -267,7 +266,7 @@ function MainApp() {
   useEffect(() => {
     if (phase === "stopped" && pendingMockRestartRef.current) {
       pendingMockRestartRef.current = false;
-      setPhase("requesting-permissions");
+      setPhase("requesting-permissions", "SESSION_RESTART");
     }
   }, [phase]);
 
@@ -332,8 +331,8 @@ function MainApp() {
 
       {showPuppet && (
         <div className="relative w-full max-w-[560px] aspect-square">
-          {/* Dark overlay while brain is generating — fades to black */}
-          <div className={`absolute inset-0 bg-black z-10 pointer-events-none transition-opacity duration-700 ${isThinking ? "opacity-60" : "opacity-0"}`} />
+          {/* Dark overlay — fades out over 2s when first TTS audio chunk arrives */}
+          <div className={`absolute inset-0 bg-black z-10 pointer-events-none transition-opacity duration-[2000ms] ${hasSpokenThisSession ? "opacity-0" : "opacity-100"}`} />
           <PuppetScene canvasRef={puppetCanvasRef} />
           {/* Webcam PIP — bottom-right, mirrored; hidden once stream stops */}
           <video

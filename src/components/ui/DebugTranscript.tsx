@@ -14,7 +14,7 @@ function relTime(ts: number, startTs: number | null): string {
  */
 export default function DebugTranscript() {
   const [expanded, setExpanded] = useState(true);
-  const [tab, setTab] = useState<"transcript" | "log">("transcript");
+  const [tab, setTab] = useState<"transcript" | "vision" | "log">("transcript");
   const [debugInput, setDebugInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const transcriptBottomRef = useRef<HTMLDivElement>(null);
@@ -27,6 +27,9 @@ export default function DebugTranscript() {
   const isListening = useSessionStore((s) => s.isListening);
   const sessionStartTs = useSessionStore((s) => s.sessionStartTs);
   const submitDebugTranscription = useSessionStore((s) => s.submitDebugTranscription);
+  const observations = useSessionStore((s) => s.observations);
+  const visionSetting = useSessionStore((s) => s.visionSetting);
+  const isUserLaughing = useSessionStore((s) => s.isUserLaughing);
 
   // Auto-scroll to bottom on new entries
   useEffect(() => {
@@ -89,7 +92,7 @@ export default function DebugTranscript() {
         <div className="w-72 bg-black/90 border border-emerald-400/30 rounded overflow-hidden">
           {/* Tab bar */}
           <div className="flex border-b border-emerald-400/20">
-            {(["transcript", "log"] as const).map((t) => (
+            {(["transcript", "vision", "log"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -97,7 +100,9 @@ export default function DebugTranscript() {
                   tab === t ? "text-emerald-300 bg-emerald-900/30" : "text-white/30 hover:text-white/50"
                 }`}
               >
-                {t === "log" ? `log (${timingLog.length})` : `transcript (${transcriptHistory.length})`}
+                {t === "log" ? `log (${timingLog.length})`
+                  : t === "vision" ? `vision (${observations.length})`
+                  : `transcript (${transcriptHistory.length})`}
               </button>
             ))}
           </div>
@@ -131,6 +136,29 @@ export default function DebugTranscript() {
                   })
                 )}
                 <div ref={transcriptBottomRef} />
+              </>
+            )}
+            {tab === "vision" && (
+              <>
+                {visionSetting && (
+                  <div className="mb-1.5 px-1.5 py-1 rounded bg-purple-400/10 border border-purple-400/30 text-purple-300">
+                    Setting: <span className="font-bold">{visionSetting}</span>
+                  </div>
+                )}
+                {isUserLaughing && (
+                  <div className="mb-1.5 px-1.5 py-1 rounded bg-yellow-400/10 border border-yellow-400/30 text-yellow-300 font-bold animate-pulse">
+                    LAUGH DETECTED
+                  </div>
+                )}
+                {observations.length === 0 ? (
+                  <div className="text-white/20 italic">No observations yet</div>
+                ) : (
+                  observations.map((obs, i) => (
+                    <div key={i} className="mb-0.5 text-blue-300/80">
+                      <span className="text-white/20">•</span> {obs}
+                    </div>
+                  ))
+                )}
               </>
             )}
             {tab === "log" && (

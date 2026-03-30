@@ -142,13 +142,20 @@ function MouthHemispheres({ children }: { children?: React.ReactNode }) {
 
   useFrame(() => {
     const amp = useSessionStore.getState().audioAmplitude;
-    openAmt.current += (amp * 1 - openAmt.current) * 0.04;
-    // openAmt.current = useSessionStore.getState().audioAmplitude;
+    // Fast attack (0.5), slower release (0.15) for snappy but smooth mouth
+    const speed = amp > openAmt.current ? 0.5 : 0.15;
+    openAmt.current += (amp - openAmt.current) * speed;
 
     // Bottom jaw rotates downward  (+X)
     if (bottomGroupRef.current) bottomGroupRef.current.rotation.x =  openAmt.current;
     // Top jaw rotates upward       (−X, 40% range)
     if (topGroupRef.current)    topGroupRef.current.rotation.x    = -openAmt.current * 0.4;
+
+    // Debug bars — write to global for HUD overlay to read
+    if (typeof window !== "undefined") {
+      (window as unknown as Record<string, number>).__DEBUG_AMP__ = amp;
+      (window as unknown as Record<string, number>).__DEBUG_MOUTH__ = openAmt.current;
+    }
   });
 
   return (

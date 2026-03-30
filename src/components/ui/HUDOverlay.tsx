@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef } from "react";
 import { useSessionStore } from "@/store/useSessionStore";
 
 interface Props {
@@ -24,7 +25,7 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
 
   return (
     <div
-      className="absolute inset-0 pointer-events-none z-10"
+      className="absolute inset-0 pointer-events-none z-10 overflow-hidden"
       data-testid="hud-overlay"
       data-brain-state={brainState ?? ""}
     >
@@ -53,8 +54,8 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
           </span>
         )}
         {isDev && isRoasting && isConversation && isUserLaughing && (
-          <span className="text-xs text-yellow-300 font-bold uppercase tracking-wider animate-pulse ml-2">
-            😂 Laughing
+          <span className="text-xs text-yellow-300 font-bold uppercase tracking-wider ml-2">
+            <span className="animate-pulse">LAUGH DETECTED</span>
           </span>
         )}
         {isDev && isRoasting && isConversation && brainState && (
@@ -73,11 +74,14 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
 
       {/* Transcript moved to DebugTranscript panel (right side, collapsed by default) */}
 
+      {/* Debug amplitude bars */}
+      {isDev && isRoasting && <DebugAmplitudeBars />}
+
       {/* Bottom buttons */}
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-3 pointer-events-auto">
         {isRoasting && (
           <button
-            onClick={() => setPhase("stopped")}
+            onClick={() => setPhase("stopped", "STOP_CLICKED")}
             className="px-8 py-3 bg-white/10 hover:bg-white/20 backdrop-blur border border-white/20 rounded-full text-white font-bold transition-all"
           >
             Stop Session
@@ -92,13 +96,59 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
               Start Session
             </button>
             <button
-              onClick={() => setPhase("sharing")}
+              onClick={() => setPhase("sharing", "SHARE_CLICKED")}
               className="px-6 py-3 bg-white/10 hover:bg-white/20 backdrop-blur border border-white/20 rounded-full text-white font-bold transition-all"
             >
               Share
             </button>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Two vertical bars showing raw amplitude vs mouth output — rAF driven, no re-renders. */
+function DebugAmplitudeBars() {
+  const ampRef = useRef<HTMLDivElement>(null);
+  const mouthRef = useRef<HTMLDivElement>(null);
+  const ampLabelRef = useRef<HTMLSpanElement>(null);
+  const mouthLabelRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    let raf = 0;
+    function tick() {
+      const w = window as unknown as Record<string, number>;
+      const amp = w.__DEBUG_AMP__ ?? 0;
+      const mouth = w.__DEBUG_MOUTH__ ?? 0;
+      if (ampRef.current) ampRef.current.style.height = `${amp * 100}%`;
+      if (mouthRef.current) mouthRef.current.style.height = `${mouth * 100}%`;
+      if (ampLabelRef.current) ampLabelRef.current.textContent = amp.toFixed(2);
+      if (mouthLabelRef.current) mouthLabelRef.current.textContent = mouth.toFixed(2);
+      raf = requestAnimationFrame(tick);
+    }
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const barContainer = "w-4 h-24 bg-white/10 rounded-sm relative overflow-hidden";
+  const barFill = "absolute bottom-0 left-0 right-0 rounded-sm transition-none";
+
+  return (
+    <div className="absolute bottom-24 left-4 flex gap-2 items-end pointer-events-none">
+      <div className="flex flex-col items-center gap-1">
+        <div className={barContainer}>
+          <div ref={ampRef} className={`${barFill} bg-green-400/80`} />
+        </div>
+        <span ref={ampLabelRef} className="text-[9px] font-mono text-green-400/70">0</span>
+        <span className="text-[8px] font-mono text-white/30">AMP</span>
+      </div>
+      <div className="flex flex-col items-center gap-1">
+        <div className={barContainer}>
+          <div ref={mouthRef} className={`${barFill} bg-orange-400/80`} />
+        </div>
+        <span ref={mouthLabelRef} className="text-[9px] font-mono text-orange-400/70">0</span>
+        <span className="text-[8px] font-mono text-white/30">JAW</span>
       </div>
     </div>
   );

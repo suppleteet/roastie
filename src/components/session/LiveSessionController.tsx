@@ -14,7 +14,6 @@ import {
   LIVE_MODEL,
   LIVE_VOICE_NAME,
   WEBCAM_SEND_INTERVAL_MS,
-  VISION_INTERVAL_MS,
   SESSION_ROTATE_MS,
   MIC_MIME_TYPE,
   MOCK_LINES,
@@ -51,6 +50,7 @@ export default function LiveSessionController({
   const visionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const rotateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userSpeakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const laughDecayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const kickoffTimeRef = useRef<number | null>(null);
   const firstSpeechRecordedRef = useRef(false);
@@ -58,8 +58,6 @@ export default function LiveSessionController({
   // TTS pipeline — brain-driven, sequential ElevenLabs requests
   const ttsChainRef = useRef<Promise<void>>(Promise.resolve());
   const ttsGenerationRef = useRef(0);
-  // Last-N ElevenLabs request IDs — passed as previous_request_ids for vocal continuity
-  const ttsRequestIdsRef = useRef<string[]>([]);
 
   // rAF for TTS drain detection
   const drainRafRef = useRef<number>(0);
@@ -129,14 +127,11 @@ export default function LiveSessionController({
     wasDrainedRef.current = false; // reset edge so drain detection fires when this plays through
     const gen = ttsGenerationRef.current;
 
-    // Fire TTS fetch NOW — doesn't wait for previous joke to finish fetching
-    const audioPromise = prefetchTts(text.trim(), gen);
-
+    // Stream sequentially — chunks go directly to playback, so concurrent streams would interleave
     ttsChainRef.current = ttsChainRef.current.then(async () => {
       if (ttsGenerationRef.current !== gen || !isRunningRef.current) return;
-      // Motion fires when THIS joke is about to play (not at queue time)
       if (motion) useSessionStore.getState().setActiveMotionState(motion, intensity ?? 0.7);
-      await scheduleFromPrefetch(audioPromise, gen);
+      await streamTts(text.trim(), gen);
     });
   }
 
@@ -149,63 +144,79 @@ export default function LiveSessionController({
 
   // ─── TTS pipeline ─────────────────────────────────────────────────────────────
 
-  async function prefetchTts(text: string, gen: number): Promise<ArrayBuffer | null> {
-    if (!isRunningRef.current) return null;
+  /**
+   * Stream TTS via WebSocket SSE endpoint — audio chunks are fed to playback
+   * as they arrive, cutting time-to-first-audio by ~1-1.5s vs REST.
+   * Returns a promise that resolves when the full sentence has been streamed.
+   */
+  async function streamTts(text: string, gen: number): Promise<void> {
+    if (!isRunningRef.current) return;
+    const ttsSpanId = useSessionStore.getState().beginSpan("tts", text.slice(0, 22));
+    let firstChunk = true;
+
     try {
-      const ttsSpanId = useSessionStore.getState().beginSpan("tts", text.slice(0, 22));
-      // Snapshot current IDs — concurrent prefetches may share the same previous IDs, that's OK
-      const previousRequestIds = [...ttsRequestIdsRef.current];
-      const resp = await fetch("/api/tts", {
+      const resp = await fetch("/api/tts-ws", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          ...(previousRequestIds.length > 0 ? { previousRequestIds } : {}),
-        }),
+        body: JSON.stringify({ text }),
       });
-      useSessionStore.getState().endSpan(ttsSpanId);
-      if (!resp.ok || ttsGenerationRef.current !== gen) return null;
-      // Capture request-id for continuity on the next call
-      const requestId = resp.headers.get("x-request-id");
-      if (requestId) {
-        ttsRequestIdsRef.current = [...ttsRequestIdsRef.current, requestId].slice(-3);
+
+      if (!resp.ok || !resp.body || ttsGenerationRef.current !== gen) {
+        useSessionStore.getState().endSpan(ttsSpanId);
+        return;
       }
-      return resp.arrayBuffer();
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (ttsGenerationRef.current !== gen || !isRunningRef.current) {
+          reader.cancel();
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6)) as { type: string; chunk?: string };
+            if (event.type === "audio" && event.chunk) {
+              if (firstChunk) {
+                firstChunk = false;
+                recordTtfs();
+              }
+              playback.enqueueChunk(event.chunk);
+              useSessionStore.getState().setIsSpeaking(true);
+            }
+          } catch { /* malformed SSE line */ }
+        }
+      }
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
-        console.error("[live] TTS prefetch error:", e);
+        console.error("[live] TTS stream error:", e);
       }
-      return null;
     }
+    useSessionStore.getState().endSpan(ttsSpanId);
   }
 
-  async function scheduleFromPrefetch(
-    audioPromise: Promise<ArrayBuffer | null>,
-    gen: number,
-  ): Promise<void> {
-    const ab = await audioPromise;
-    if (!ab || !isRunningRef.current || ttsGenerationRef.current !== gen) return;
-
-    await playback.decodeAndEnqueue(ab);
-
-    if (ttsGenerationRef.current !== gen) {
-      playback.flush();
-      return;
-    }
-
-    // TTFS — first audio scheduled
+  /** Record time-to-first-speech and start recording on first audio. */
+  function recordTtfs(): void {
     if (!firstSpeechRecordedRef.current && kickoffTimeRef.current !== null) {
       firstSpeechRecordedRef.current = true;
       const ttfs = Date.now() - kickoffTimeRef.current;
       useSessionStore.getState().setTimeToFirstSpeechMs(ttfs);
       useSessionStore.getState().logTiming(`brain: TTFS ${ttfs}ms`);
       useSessionStore.getState().setHasSpokenThisSession(true);
-      // Start recording now that the puppet is about to speak for the first time.
       if (!mockMode && videoRecorderRef.current && compositorStream && isRunningRef.current) {
         videoRecorderRef.current.start(compositorStream, getRecordingAudioStream());
       }
     }
-    useSessionStore.getState().setIsSpeaking(true);
   }
 
   // ─── TTS drain detection via rAF ─────────────────────────────────────────────
@@ -399,6 +410,38 @@ export default function LiveSessionController({
     }
   }
 
+  // ─── Laugh detection (vision-based) ────────────────────────────────────────────
+
+  const LAUGH_KEYWORDS = ["laugh", "cracking up", "giggl", "chuckl", "grin", "smirk", "hysterical"];
+  const LAUGH_DECAY_MS = 4000; // clear laugh state if next vision doesn't confirm
+
+  function detectLaughter(observations: string[]) {
+    const isLaughing = observations.some((obs) => {
+      const lower = obs.toLowerCase();
+      return LAUGH_KEYWORDS.some((kw) => lower.includes(kw));
+    });
+
+    if (isLaughing) {
+      useSessionStore.getState().setIsUserLaughing(true);
+      useSessionStore.getState().addConversationEvent("user-laugh");
+      // Reset decay timer — will clear if next vision call doesn't confirm
+      if (laughDecayTimerRef.current) clearTimeout(laughDecayTimerRef.current);
+      laughDecayTimerRef.current = setTimeout(clearLaughter, LAUGH_DECAY_MS);
+    } else {
+      clearLaughter();
+    }
+  }
+
+  function clearLaughter() {
+    if (useSessionStore.getState().isUserLaughing) {
+      useSessionStore.getState().setIsUserLaughing(false);
+    }
+    if (laughDecayTimerRef.current) {
+      clearTimeout(laughDecayTimerRef.current);
+      laughDecayTimerRef.current = null;
+    }
+  }
+
   // ─── Webcam + Vision ──────────────────────────────────────────────────────────
 
   function startWebcamSend() {
@@ -425,6 +468,8 @@ export default function LiveSessionController({
     const frame = webcamRef.current?.captureFrame();
     if (!frame) {
       brainRef.current?.setCameraAvailable(false);
+      useSessionStore.getState().logTiming("vision: no frame (camera not ready)");
+      scheduleNextVision();
       return;
     }
     const { burnIntensity: bi, activePersona: ap } = useSessionStore.getState();
@@ -439,29 +484,43 @@ export default function LiveSessionController({
       .then((r) => r.json())
       .then((d) => {
         useSessionStore.getState().endSpan(visionSpanId);
-        if (d.observations?.length) {
-          useSessionStore.getState().setObservations(d.observations);
-          brainRef.current?.onVisionUpdate(d.observations as string[]);
+        const obs: string[] = d.observations ?? [];
+        const setting: string | null = d.setting ?? null;
+        useSessionStore.getState().logTiming(`vision: ${obs.length} obs — ${obs.join("; ").slice(0, 100)}${setting ? ` [${setting}]` : ""}`);
+        if (obs.length) {
+          useSessionStore.getState().setObservations(obs);
+          brainRef.current?.onVisionUpdate(obs);
+          detectLaughter(obs);
+        } else {
+          clearLaughter();
+        }
+        if (setting) {
+          useSessionStore.getState().setVisionSetting(setting);
         }
       })
       .catch((e) => {
         useSessionStore.getState().endSpan(visionSpanId);
-        console.warn("[vision] analyze fetch failed:", e);
+        useSessionStore.getState().logTiming(`vision: ERROR — ${(e as Error).message}`);
+      })
+      .finally(() => {
+        scheduleNextVision();
       });
+  }
+
+  /** Fire the next vision call immediately after the previous one completes. */
+  function scheduleNextVision() {
+    if (!isRunningRef.current) return;
+    visionIntervalRef.current = setTimeout(runVisionAnalyze, 0);
   }
 
   function startVisionSend() {
     stopVisionSend();
     runVisionAnalyze();
-    visionIntervalRef.current = setInterval(() => {
-      if (!isRunningRef.current) return;
-      runVisionAnalyze();
-    }, VISION_INTERVAL_MS);
   }
 
   function stopVisionSend() {
     if (visionIntervalRef.current) {
-      clearInterval(visionIntervalRef.current);
+      clearTimeout(visionIntervalRef.current);
       visionIntervalRef.current = null;
     }
   }
@@ -521,7 +580,7 @@ export default function LiveSessionController({
     isRunningRef.current = true;
     ttsChainRef.current = Promise.resolve();
     ttsGenerationRef.current++;
-    ttsRequestIdsRef.current = [];
+
 
     userSpeakingSpanRef.current = null;
     geminiWaitingSpanRef.current = null;
@@ -594,7 +653,7 @@ export default function LiveSessionController({
     isRunningRef.current = true;
     ttsChainRef.current = Promise.resolve();
     ttsGenerationRef.current++; // increment (not reset) — invalidates any in-flight TTS from prior session
-    ttsRequestIdsRef.current = [];
+
 
     userSpeakingSpanRef.current = null;
     geminiWaitingSpanRef.current = null;
@@ -616,6 +675,7 @@ export default function LiveSessionController({
       getBurnIntensity: () => useSessionStore.getState().burnIntensity,
       getContentMode: () => useSessionStore.getState().contentMode,
       getObservations: () => useSessionStore.getState().observations,
+      getVisionSetting: () => useSessionStore.getState().visionSetting,
       setBrainState: (s) => useSessionStore.getState().setBrainState(s),
       setCurrentQuestion: (q) => useSessionStore.getState().setCurrentQuestion(q),
       setUserAnswer: (a) => useSessionStore.getState().setUserAnswer(a),

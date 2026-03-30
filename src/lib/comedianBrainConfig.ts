@@ -1,31 +1,14 @@
 /**
- * Declarative state machine configuration for ComedianBrain.
- *
- * To add/remove/reorder states: edit STATE_CONFIG and implement the
- * corresponding enter method on ComedianBrain. No other wiring needed.
+ * Re-export shim — types are now canonical in @/lib/stateMachine.
+ * This file keeps the legacy STATE_CONFIG (with `next` field) for
+ * comedianBrain.ts until it's migrated to use BRAIN_TRANSITIONS directly.
  */
-
-export type BrainState =
-  | "greeting"
-  | "vision_jokes"
-  | "ask_question"
-  | "wait_answer"
-  | "prodding"
-  | "pre_generate"
-  | "generating"
-  | "delivering"
-  | "redirecting"
-  | "check_vision"
-  | "vision_react";
-
-export type MicMode = "off" | "listening" | "passive";
+export type { BrainState, MicMode } from "@/lib/stateMachine";
+import type { BrainState, MicMode } from "@/lib/stateMachine";
 
 export interface StateDefinition {
-  /** Default next state after TTS drains (can be overridden by brain logic) */
   next: BrainState;
-  /** Microphone routing for this state */
   micMode: MicMode;
-  /** State to jump to when skipping (e.g. silence timeout) — null = not skippable */
   canSkipTo: BrainState | null;
 }
 

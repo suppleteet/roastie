@@ -3,6 +3,21 @@ import { ComedianBrain, type ComedianBrainDeps } from "@/lib/comedianBrain";
 import type { BrainState } from "@/lib/comedianBrainConfig";
 import type { JokeResponse } from "@/app/api/generate-joke/route";
 
+// Override latency experiment flags so tests run the full greeting/pre_generate flow
+vi.mock("@/lib/comedianConfig", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/comedianConfig")>();
+  return {
+    ...original,
+    COMEDIAN_CONFIG: {
+      ...original.COMEDIAN_CONFIG,
+      skipGreeting: false,
+      skipPreGeneration: false,
+      skipFiller: false,
+      singleJokeMode: false,
+    },
+  };
+});
+
 vi.mock("@/lib/personas", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/personas")>();
   return {
@@ -47,6 +62,7 @@ function makeDeps(overrides?: Partial<ComedianBrainDeps>): ComedianBrainDeps {
     getBurnIntensity: vi.fn().mockReturnValue(3),
     getContentMode: vi.fn().mockReturnValue("clean"),
     getObservations: vi.fn().mockReturnValue([]),
+    getVisionSetting: vi.fn().mockReturnValue(null),
     setBrainState: vi.fn(),
     setCurrentQuestion: vi.fn(),
     setUserAnswer: vi.fn(),

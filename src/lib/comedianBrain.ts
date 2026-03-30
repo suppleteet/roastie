@@ -48,6 +48,7 @@ export interface ComedianBrainDeps {
   getBurnIntensity: () => BurnIntensity;
   getContentMode: () => "clean" | "vulgar";
   getObservations: () => string[];
+  getVisionSetting: () => string | null;
   setBrainState: (state: BrainState | null) => void;
   setCurrentQuestion: (q: string | null) => void;
   setUserAnswer: (ans: string) => void;
@@ -123,7 +124,20 @@ export class ComedianBrain {
   private shuffledQuestions: ComedyQuestion[] = [];
   private questionIndex = 0;
   private pendingFollowUp: string | null = null;
+  private followUpCount = 0; // how many follow-ups asked for current topic
+  private askedQuestionIds: Set<string> = new Set();
   private currentQuestion: ComedyQuestion | null = null;
+  // Single-joke pipeline state
+  private pipelineAnswer: string | null = null;
+  private pipelineJokesDelivered = 0;
+  private pipelinePreviousJokes: string[] = []; // what was already said, so pipeline doesn't repeat
+  private pipelinePrefetch: { jokes: JokeItem[]; meta: { followUp?: string; tags?: string[] } | null; done: boolean } | null = null;
+  private pipelinePrefetchAbort: AbortController | null = null;
+  /** Pre-queued question — rephrased via LLM while last joke plays; TTS fired when rephrase resolves */
+  private preQueuedQuestion: ComedyQuestion | null = null;
+  /** True once rephrase resolved and queueSpeak was called */
+  private preQueuedTextReady = false;
+  private rephraseAbort: AbortController | null = null;
   private answerBuffer = "";
   /** Incremented each time enterGenerating fires — stale stream callbacks check this to avoid double delivery. */
   private deliveryGeneration = 0;
@@ -192,11 +206,22 @@ export class ComedianBrain {
     const rest = shuffle(QUESTION_BANK.filter((q) => q.id !== "name"));
     this.shuffledQuestions = nameQuestion ? [nameQuestion, ...rest] : shuffle(QUESTION_BANK);
     this.questionIndex = 0;
+    this.askedQuestionIds = new Set();
+    this.followUpCount = 0;
     this.ledger = [];
     this.jokeHopper = [];
     this.transitionCount = 0;
     this.consecutiveSilentQuestions = 0;
     this.visionOnlyMode = false;
+    this._cancelPipelinePrefetch();
+    this._cancelRephrase();
+
+    // Latency experiment: skip greeting entirely
+    if (COMEDIAN_CONFIG.skipGreeting) {
+      this.deps.logTiming("brain: skipGreeting — jumping to ask_question");
+      this.enterAskQuestion();
+      return;
+    }
 
     // If vision observations are already available (pre-scanned), skip greeting → vision jokes
     const existingObs = this.deps.getObservations();
@@ -214,6 +239,7 @@ export class ComedianBrain {
     this._clearTimers();
     this._cancelSpeculative();
     this._cancelHopper();
+    this._cancelRephrase();
     this.deps.setBrainState(null);
     this.micMode = "off";
   }
@@ -283,8 +309,12 @@ export class ComedianBrain {
       this.answerBuffer = smartJoin(this.answerBuffer, text);
       this.deps.setUserAnswer(this.answerBuffer);
       this.deps.logTiming(`brain: late transcription during generating — "${text}" → buffer now "${this.answerBuffer}"`);
-      this._transition("pre_generate");
-      this._cancelSpeculative();
+      if (!COMEDIAN_CONFIG.skipPreGeneration) {
+        this._transition("pre_generate");
+        this._cancelSpeculative();
+      } else {
+        this._transition("wait_answer");
+      }
       this._startAnswerSilenceTimer();
       return;
     }
@@ -311,6 +341,7 @@ export class ComedianBrain {
 
       // Start speculative generation once we have enough words
       if (
+        !COMEDIAN_CONFIG.skipPreGeneration &&
         this.state === "wait_answer" &&
         wordCount(this.answerBuffer) >= COMEDIAN_CONFIG.speculativeMinWords
       ) {
@@ -333,8 +364,31 @@ export class ComedianBrain {
 
     if (observations.length === 0) return;
 
+    // When greeting was skipped, queue a vision joke for delivery after the current question
+    if (COMEDIAN_CONFIG.skipGreeting && this.previousObservations.length === 0) {
+      this.previousObservations = observations;
+      this.deps.logTiming("brain: first vision with skipGreeting — queuing vision joke to hopper");
+      this._generateJoke({
+        context: "vision_opening",
+        observations,
+        knownFacts: this._getThrowbackContext(),
+        imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
+      }).then((response) => {
+        if (!response || response.jokes.length === 0) return;
+        // Add to hopper instead of speaking immediately — avoids overlapping with question TTS
+        for (const joke of response.jokes) {
+          this._addToHopper(joke.text, joke.motion, joke.intensity, joke.score ?? 9);
+        }
+      });
+    }
+
     // Feed hopper with new vision context
     this._fireHopperGeneration("vision", observations);
+
+    // If stuck in check_vision (vision-only mode), re-evaluate with new observations
+    if (this.state === "check_vision") {
+      this.enterCheckVision();
+    }
   }
 
   /** Called when all queued TTS has finished playing */
@@ -497,10 +551,12 @@ export class ComedianBrain {
     // Determine which question to ask
     let question: ComedyQuestion | null = null;
 
-    if (this.pendingFollowUp && !sameQuestion) {
-      // Ask generated follow-up
+    if (this.pendingFollowUp && !sameQuestion && this.followUpCount < 1) {
+      // Ask generated follow-up (max 1 per topic, then move on)
       const followUpText = this.pendingFollowUp;
       this.pendingFollowUp = null;
+      this.followUpCount++;
+      this.preQueuedQuestion = null; // follow-up overrides any pre-queue
       this.currentQuestion = {
         id: "follow_up",
         question: followUpText,
@@ -510,27 +566,64 @@ export class ComedianBrain {
           "I'm waiting. The audience is waiting.",
         ],
       };
+      this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
+      this.deps.queueSpeak(followUpText, this.lastJokeMotion, this.lastJokeIntensity);
     } else if (sameQuestion && this.currentQuestion) {
       // Re-ask same question (after redirect)
+      this.preQueuedQuestion = null;
+      this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
+      this.deps.queueSpeak(this.currentQuestion.question, this.lastJokeMotion, this.lastJokeIntensity);
     } else if (this.visionOnlyMode) {
-      // Vision-only: no more questions
+      // Vision-only: no more questions, wait in check_vision for interesting changes
       this._transition("check_vision");
-      this.enterCheckVision();
+      this.deps.logTiming("brain: vision-only mode, waiting for interesting vision change");
+      this.deps.setMotion("idle", 0.3);
       return;
-    } else {
-      question = this.shuffledQuestions[this.questionIndex % this.shuffledQuestions.length];
-      this.questionIndex++;
+    } else if (this.preQueuedQuestion) {
+      // Rephrase was fired speculatively — consume it
+      this.pendingFollowUp = null;
+      this.followUpCount = 0;
+      question = this.preQueuedQuestion;
+      const wasReady = this.preQueuedTextReady;
+      this.preQueuedQuestion = null; // clear so stale rephrase callbacks bail out
+      this.preQueuedTextReady = false;
+      this.askedQuestionIds.add(question.id);
       this.currentQuestion = question;
+      if (wasReady) {
+        // Rephrase finished and TTS is already in the chain — gapless
+        this.deps.logTiming("brain: using pre-queued question (zero wait)");
+      } else {
+        // Rephrase didn't finish in time — fall back to original text immediately
+        this.deps.logTiming("brain: rephrase not ready — using original question text");
+        this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
+        this.deps.queueSpeak(question.question, this.lastJokeMotion, this.lastJokeIntensity);
+      }
+    } else {
+      // Clear follow-up state — new topic
+      this.pendingFollowUp = null;
+      this.followUpCount = 0;
+
+      // Find next question, skipping any excluded by previously asked questions
+      question = this._nextValidQuestion();
+      if (!question) {
+        // All questions exhausted — fall to vision-only mode, wait for interesting changes
+        this.visionOnlyMode = true;
+        this._transition("check_vision");
+        this.deps.logTiming("brain: all questions exhausted, entering vision-only mode");
+        this.deps.setMotion("idle", 0.3);
+        return;
+      }
+      this.askedQuestionIds.add(question.id);
+      this.currentQuestion = question;
+      // Queue TTS — not pre-queued
+      this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
+      this.deps.queueSpeak(this.currentQuestion.question, this.lastJokeMotion, this.lastJokeIntensity);
     }
 
     if (!this.currentQuestion) return;
 
     this.deps.setCurrentQuestion(this.currentQuestion.question);
     this._addLedger("question", this.currentQuestion.question, []);
-
-    // Match the energy of the last delivered joke so the question flows naturally
-    this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
-    this.deps.queueSpeak(this.currentQuestion.question, this.lastJokeMotion, this.lastJokeIntensity);
   }
 
   private enterWaitAnswer(): void {
@@ -540,7 +633,7 @@ export class ComedianBrain {
     // If user already spoke during ask_question, start silence timer (not prod timer)
     if (this.answerBuffer.trim()) {
       this.deps.logTiming(`brain: wait_answer with pre-buffered answer — "${this.answerBuffer}"`);
-      if (wordCount(this.answerBuffer) >= COMEDIAN_CONFIG.speculativeMinWords) {
+      if (!COMEDIAN_CONFIG.skipPreGeneration && wordCount(this.answerBuffer) >= COMEDIAN_CONFIG.speculativeMinWords) {
         this._transition("pre_generate");
         this._startSpeculative();
       }
@@ -613,15 +706,18 @@ export class ComedianBrain {
     // Queue an immediate filler so the user hears something right away while the API generates.
     // Short answers: echo the answer back ("Tyler." / "San Francisco.") — instant and funny.
     // Longer answers: use a generic short reaction.
-    const answerWords = answer.trim().split(/\s+/);
-    const isEchoFiller = answerWords.length <= 3;
-    const filler = isEchoFiller
-      ? `${answer}.`
-      : ComedianBrain.GENERATING_FILLERS[Math.floor(Math.random() * ComedianBrain.GENERATING_FILLERS.length)];
-    this.deps.queueSpeak(filler, "thinking", 0.6);
-    this.deps.logTiming(`brain: filler — "${filler}"`);
-    // Only pass filler to generator when it echoed the answer — so the joke doesn't repeat it
-    const fillerAlreadySaid = isEchoFiller ? filler : undefined;
+    let fillerAlreadySaid: string | undefined;
+    if (!COMEDIAN_CONFIG.skipFiller) {
+      const answerWords = answer.trim().split(/\s+/);
+      const isEchoFiller = answerWords.length <= 3;
+      const filler = isEchoFiller
+        ? `${answer}.`
+        : ComedianBrain.GENERATING_FILLERS[Math.floor(Math.random() * ComedianBrain.GENERATING_FILLERS.length)];
+      this.deps.queueSpeak(filler, "thinking", 0.6);
+      this.deps.logTiming(`brain: filler — "${filler}"`);
+      // Only pass filler to generator when it echoed the answer — so the joke doesn't repeat it
+      fillerAlreadySaid = isEchoFiller ? filler : undefined;
+    }
 
     const q = this.currentQuestion;
     const conversationSoFar = this._getLedgerContext();
@@ -669,6 +765,13 @@ export class ComedianBrain {
     let metaHandled = false;
     const gen = this.deliveryGeneration; // snapshot — stale callbacks check this
 
+    // Track answer for single-joke pipeline
+    if (COMEDIAN_CONFIG.singleJokeMode) {
+      this.pipelineAnswer = answer;
+      this.pipelineJokesDelivered = 0;
+      this.pipelinePreviousJokes = [];
+    }
+
     this._generateJokeStream(
       {
         context: "answer_roast",
@@ -676,6 +779,8 @@ export class ComedianBrain {
         userAnswer: answer,
         fillerAlreadySaid,
         conversationSoFar,
+        knownFacts: this._getThrowbackContext(),
+        maxJokes: COMEDIAN_CONFIG.singleJokeMode ? 1 : undefined,
         imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
       },
       // onJoke — fires immediately as each joke streams in
@@ -688,6 +793,7 @@ export class ComedianBrain {
           this.deps.setMotion("energetic", 0.8);
         }
         this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
+        if (COMEDIAN_CONFIG.singleJokeMode) this.pipelinePreviousJokes.push(joke.text);
 
         this._addLedger("joke", joke.text, []);
         this.deps.logTiming(`brain: joke[${jokesQueued}] — "${joke.text.slice(0, 60)}"`);
@@ -750,14 +856,16 @@ export class ComedianBrain {
         if (this.transitionCount % 4 === 0) {
           const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
           if (bonus) {
-            this.deps.queueSpeak("Oh wait, one more thing—", "emphasis", 0.7);
             this.deps.queueSpeak(bonus.text, bonus.motion, bonus.intensity);
             this._addLedger("joke", bonus.text, []);
-            jokesQueued += 2;
+            jokesQueued += 1;
           }
         }
 
         this._fireHopperGeneration("answer", undefined, answer);
+
+        // Speculatively prefetch next pipeline joke while current TTS plays
+        this._prefetchPipelineJoke();
       },
       // onError — stream failed, fall back to non-streaming
       () => {
@@ -830,10 +938,9 @@ export class ComedianBrain {
     if (this.transitionCount > 0 && this.transitionCount % 4 === 0) {
       const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
       if (bonus) {
-        this.deps.queueSpeak("Oh wait, one more thing—", "emphasis", 0.7);
         this.deps.queueSpeak(bonus.text, bonus.motion, bonus.intensity);
         this._addLedger("joke", bonus.text, []);
-        queued += 2;
+        queued += 1;
       }
     }
 
@@ -844,6 +951,20 @@ export class ComedianBrain {
   private _onDeliveringDrained(): void {
     this.transitionCount++;
 
+    // Single-joke pipeline: generate the next joke while delivering
+    if (COMEDIAN_CONFIG.singleJokeMode && this.pipelineAnswer) {
+      this.pipelineJokesDelivered++;
+      const maxJokesPerAnswer = COMEDIAN_CONFIG.jokesPerAnswer.max;
+      if (this.pipelineJokesDelivered < maxJokesPerAnswer) {
+        this.deps.logTiming(`brain: pipeline next joke (${this.pipelineJokesDelivered + 1}/${maxJokesPerAnswer})`);
+        this._pipelineNextJoke();
+        return;
+      }
+      // Done with this answer's pipeline
+      this.pipelineAnswer = null;
+      this._cancelPipelinePrefetch();
+    }
+
     // Follow-up takes priority over next question
     if (this.pendingFollowUp) {
       this.enterAskQuestion();
@@ -851,6 +972,201 @@ export class ComedianBrain {
     }
 
     this.enterCheckVision();
+  }
+
+  /** Generate the next pipelined joke for the current answer. */
+  private _pipelineNextJoke(): void {
+    const answer = this.pipelineAnswer;
+    if (!answer) return;
+
+    // Check if prefetch completed while current joke was playing
+    const prefetch = this.pipelinePrefetch;
+    if (prefetch?.done && prefetch.jokes.length > 0) {
+      this.deps.logTiming("brain: using prefetched pipeline joke (zero wait)");
+      this.pipelinePrefetch = null;
+      this.pipelinePrefetchAbort = null;
+
+      this._transition("delivering");
+      this.deps.setMotion("energetic", 0.8);
+      for (const joke of prefetch.jokes) {
+        this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
+        this.pipelinePreviousJokes.push(joke.text);
+        this._addLedger("joke", joke.text, []);
+        this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
+        this.lastJokeIntensity = joke.intensity;
+      }
+      if (prefetch.meta?.followUp) this.pendingFollowUp = prefetch.meta.followUp;
+      if (prefetch.meta?.tags?.length) this._addLedger("answer", answer, prefetch.meta.tags);
+      return;
+    }
+
+    // Prefetch not ready or failed — generate fresh (streaming)
+    this._cancelPipelinePrefetch();
+    this._transition("generating");
+    this.deliveryGeneration++;
+    this.deps.setMotion("thinking", 0.7);
+
+    const q = this.currentQuestion;
+    const conversationSoFar = this._getLedgerContext();
+    const gen = this.deliveryGeneration;
+
+    const alreadySaid = this.pipelinePreviousJokes.length > 0
+      ? this.pipelinePreviousJokes.join(" | ")
+      : undefined;
+
+    this._generateJokeStream(
+      {
+        context: "answer_roast",
+        question: q?.question,
+        userAnswer: answer,
+        fillerAlreadySaid: alreadySaid,
+        conversationSoFar,
+        knownFacts: this._getThrowbackContext(),
+        maxJokes: 1,
+        imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
+      },
+      (joke) => {
+        if (this.deliveryGeneration !== gen) return;
+        if (this.state !== "generating" && this.state !== "delivering") return;
+        if (this.state === "generating") {
+          this._transition("delivering");
+          this.deps.setMotion("energetic", 0.8);
+        }
+        this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
+        this.pipelinePreviousJokes.push(joke.text);
+        this._addLedger("joke", joke.text, []);
+        this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
+        this.lastJokeIntensity = joke.intensity;
+      },
+      (meta) => {
+        if (this.deliveryGeneration !== gen) return;
+        if (this.state !== "generating" && this.state !== "delivering") return;
+        if (this.state === "generating") {
+          this._transition("delivering");
+          this.deps.setMotion("energetic", 0.8);
+        }
+        if (meta.followUp) this.pendingFollowUp = meta.followUp;
+        if (meta.tags?.length) this._addLedger("answer", answer, meta.tags);
+        // This is the last pipeline joke — pre-queue next question for gapless transition
+        this._preQueueNextQuestion();
+      },
+      () => {
+        if (this.deliveryGeneration !== gen) return;
+        if (this.state === "generating") {
+          this.pipelineAnswer = null;
+          this._onDeliveringDrained();
+        }
+      },
+    );
+  }
+
+  /** Speculatively rephrase + pre-queue the next question while the current joke plays.
+   *  Fires a lightweight LLM call to rephrase the question in the puppet's voice.
+   *  On success, calls queueSpeak so TTS is already streaming when the joke finishes. */
+  private _preQueueNextQuestion(): void {
+    if (this.pendingFollowUp) return;
+    if (this.visionOnlyMode) return;
+
+    const q = this._nextValidQuestion();
+    if (!q) return;
+
+    this.preQueuedQuestion = q;
+    this.preQueuedTextReady = false;
+
+    this._cancelRephrase();
+    const abort = new AbortController();
+    this.rephraseAbort = abort;
+
+    this.deps.logTiming(`brain: rephrasing question "${q.question.slice(0, 40)}"`);
+
+    fetch("/api/rephrase-question", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: q.question,
+        persona: this.deps.getPersona(),
+        burnIntensity: this.deps.getBurnIntensity(),
+        knownFacts: this._getThrowbackContext(),
+      }),
+      signal: abort.signal,
+    })
+      .then((r) => r.json() as Promise<{ rephrased: string }>)
+      .then((data) => {
+        if (this.preQueuedQuestion?.id !== q.id) return; // stale — already consumed or cancelled
+        const text = (data.rephrased && data.rephrased.length > 0) ? data.rephrased : q.question;
+        this.preQueuedTextReady = true;
+        this.deps.logTiming(`brain: rephrase ready → "${text.slice(0, 60)}"`);
+        this.deps.queueSpeak(text, this.lastJokeMotion, this.lastJokeIntensity);
+      })
+      .catch(() => {
+        if (this.preQueuedQuestion?.id !== q.id) return; // stale or aborted
+        this.preQueuedTextReady = true;
+        this.deps.queueSpeak(q.question, this.lastJokeMotion, this.lastJokeIntensity);
+      });
+  }
+
+  private _cancelRephrase(): void {
+    if (this.rephraseAbort) {
+      this.rephraseAbort.abort();
+      this.rephraseAbort = null;
+    }
+    this.preQueuedQuestion = null;
+    this.preQueuedTextReady = false;
+  }
+
+  /** Speculatively generate the next pipeline joke while the current one plays. */
+  private _prefetchPipelineJoke(): void {
+    if (!COMEDIAN_CONFIG.singleJokeMode || !this.pipelineAnswer) return;
+    const maxJokes = COMEDIAN_CONFIG.jokesPerAnswer.max;
+    // If this is the last pipeline joke, pre-queue next question TTS for gapless transition
+    if (this.pipelineJokesDelivered + 1 >= maxJokes) {
+      this._preQueueNextQuestion();
+      return;
+    }
+
+    this._cancelPipelinePrefetch();
+    const abort = new AbortController();
+    this.pipelinePrefetchAbort = abort;
+
+    const prefetch: NonNullable<typeof this.pipelinePrefetch> = { jokes: [], meta: null, done: false };
+    this.pipelinePrefetch = prefetch;
+
+    const answer = this.pipelineAnswer;
+    const q = this.currentQuestion;
+    const alreadySaid = this.pipelinePreviousJokes.length > 0
+      ? this.pipelinePreviousJokes.join(" | ")
+      : undefined;
+
+    this.deps.logTiming("brain: prefetching next pipeline joke while current plays");
+
+    // Use non-streaming _generateJoke for simplicity — result stashed for _pipelineNextJoke
+    this._generateJoke(
+      {
+        context: "answer_roast",
+        question: q?.question,
+        userAnswer: answer,
+        fillerAlreadySaid: alreadySaid,
+        conversationSoFar: this._getLedgerContext(),
+        knownFacts: this._getThrowbackContext(),
+        maxJokes: 1,
+        imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
+      },
+      abort.signal,
+    ).then((response) => {
+      if (abort.signal.aborted || !response) return;
+      prefetch.jokes = response.jokes;
+      prefetch.meta = { followUp: response.followUp, tags: response.tags };
+      prefetch.done = true;
+      this.deps.logTiming(`brain: pipeline prefetch ready (${response.jokes.length} jokes)`);
+    }).catch(() => { /* aborted or failed — _pipelineNextJoke falls back to fresh generation */ });
+  }
+
+  private _cancelPipelinePrefetch(): void {
+    if (this.pipelinePrefetchAbort) {
+      this.pipelinePrefetchAbort.abort();
+      this.pipelinePrefetchAbort = null;
+    }
+    this.pipelinePrefetch = null;
   }
 
   private enterCheckVision(): void {
@@ -868,7 +1184,13 @@ export class ComedianBrain {
       }
     }
 
-    // Nothing interesting — next question
+    // Nothing interesting — next question (unless we've exhausted all questions)
+    if (this.visionOnlyMode) {
+      // All questions used up and vision isn't interesting — wait for next vision update
+      this.deps.logTiming("brain: vision-only mode, waiting for interesting vision change");
+      this.deps.setMotion("idle", 0.3);
+      return;
+    }
     this.enterAskQuestion();
   }
 
@@ -889,6 +1211,7 @@ export class ComedianBrain {
       context: "vision_react",
       observations: currentObs,
       previousObservations: oldObs,
+      knownFacts: this._getThrowbackContext(),
       imageBase64: frame,
     }).then((response) => {
       if (this.state !== "vision_react") return;
@@ -908,6 +1231,7 @@ export class ComedianBrain {
   // ─── Speculative pre-generation ───────────────────────────────────────────────
 
   private _startSpeculative(): void {
+    if (COMEDIAN_CONFIG.skipPreGeneration) return;
     const snapshot = this.answerBuffer.trim();
     if (this.speculativeRequest) {
       // Already running — if snapshot changed significantly, cancel and restart
@@ -934,6 +1258,7 @@ export class ComedianBrain {
         userAnswer: snapshot,
         fillerAlreadySaid,
         conversationSoFar,
+        knownFacts: this._getThrowbackContext(),
         imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
       },
       abort.signal,
@@ -970,6 +1295,7 @@ export class ComedianBrain {
         observations: observations ?? this.deps.getObservations(),
         userAnswer: answer,
         conversationSoFar,
+        knownFacts: this._getThrowbackContext(),
       },
       abort.signal,
     ).then((response) => {
@@ -999,6 +1325,19 @@ export class ComedianBrain {
     if (this.hopperAbort) {
       this.hopperAbort.abort();
       this.hopperAbort = null;
+    }
+  }
+
+  /** Add a single joke to the hopper directly (e.g. vision opening when greeting is skipped). */
+  private _addToHopper(text: string, motion: MotionState, intensity: number, score: number): void {
+    this.jokeHopper.push({
+      text, motion, intensity, score,
+      sourceContext: "vision",
+      createdAt: Date.now(),
+    });
+    this.jokeHopper.sort((a, b) => b.score - a.score);
+    if (this.jokeHopper.length > COMEDIAN_CONFIG.hopperMaxSize) {
+      this.jokeHopper.length = COMEDIAN_CONFIG.hopperMaxSize;
     }
   }
 
@@ -1044,10 +1383,40 @@ export class ComedianBrain {
     if (this.ledger.length > 30) this.ledger = this.ledger.slice(-30);
   }
 
+  /** Returns the next valid question, skipping excluded ones. Null if exhausted. */
+  private _nextValidQuestion(): ComedyQuestion | null {
+    const total = this.shuffledQuestions.length;
+    for (let i = 0; i < total; i++) {
+      const q = this.shuffledQuestions[(this.questionIndex + i) % total];
+      // Skip if already asked
+      if (this.askedQuestionIds.has(q.id)) continue;
+      // Skip if excluded by a previously asked question
+      const excluded = this.shuffledQuestions
+        .filter((prev) => this.askedQuestionIds.has(prev.id) && prev.excludes)
+        .flatMap((prev) => prev.excludes!);
+      if (excluded.includes(q.id)) continue;
+      this.questionIndex += i + 1;
+      return q;
+    }
+    return null;
+  }
+
   private _getLedgerContext(): string[] {
     return this.ledger.slice(-6).map(
       (e) => `[${e.type}] ${e.text}${e.tags.length ? ` (${e.tags.join(", ")})` : ""}`
     );
+  }
+
+  /** Full ledger summary for throwback references — all facts learned so far. */
+  private _getThrowbackContext(): string[] {
+    // Extract all tagged facts (name, job, city, etc.) from the full ledger
+    const facts: string[] = [];
+    for (const entry of this.ledger) {
+      if (entry.tags.length > 0) {
+        facts.push(...entry.tags);
+      }
+    }
+    return [...new Set(facts)]; // dedupe
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1085,6 +1454,8 @@ export class ComedianBrain {
       userAnswer?: string;
       fillerAlreadySaid?: string;
       conversationSoFar?: string[];
+      knownFacts?: string[];
+      maxJokes?: number;
       imageBase64?: string;
     },
     onJoke: (joke: JokeItem) => void,
@@ -1172,6 +1543,8 @@ export class ComedianBrain {
       observations?: string[];
       previousObservations?: string[];
       conversationSoFar?: string[];
+      knownFacts?: string[];
+      maxJokes?: number;
       imageBase64?: string;
     },
     signal?: AbortSignal,
@@ -1185,6 +1558,7 @@ export class ComedianBrain {
           persona: this.deps.getPersona(),
           burnIntensity: this.deps.getBurnIntensity(),
           contentMode: this.deps.getContentMode(),
+          setting: this.deps.getVisionSetting(),
         }),
         signal,
       });

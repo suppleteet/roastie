@@ -41,7 +41,10 @@ export interface GenerateJokeRequest {
   observations?: string[];
   previousObservations?: string[];
   conversationSoFar?: string[];
+  knownFacts?: string[];
+  maxJokes?: number;
   imageBase64?: string;
+  setting?: string | null;
 }
 
 export async function POST(req: NextRequest) {
@@ -81,10 +84,16 @@ export async function POST(req: NextRequest) {
     if (body.fillerAlreadySaid) contextLines.push(`FILLER_ALREADY_SAID: "${body.fillerAlreadySaid}" — do NOT open your joke by repeating this word or phrase.`);
     if (body.observations?.length)
       contextLines.push(`CURRENT OBSERVATIONS: ${body.observations.join("; ")}`);
+    if (body.setting)
+      contextLines.push(`SETTING: The person appears to be in their ${body.setting}. You can roast their environment if it's funny.`);
     if (body.previousObservations?.length)
       contextLines.push(`PREVIOUS OBSERVATIONS: ${body.previousObservations.join("; ")}`);
     if (body.conversationSoFar?.length)
       contextLines.push(`CONVERSATION SO FAR:\n${body.conversationSoFar.slice(-6).join("\n")}`);
+    if (body.knownFacts?.length)
+      contextLines.push(`KNOWN FACTS ABOUT THIS PERSON (sprinkle throwback references to earlier topics when it fits naturally): ${body.knownFacts.join(", ")}`);
+    if (body.maxJokes)
+      contextLines.push(`IMPORTANT: Generate exactly ${body.maxJokes} joke(s). No more.`);
 
     if (contextLines.length > 0) {
       userParts.push({ text: contextLines.join("\n\n") });

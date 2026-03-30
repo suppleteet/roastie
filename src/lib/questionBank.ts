@@ -18,6 +18,8 @@ export interface ComedyQuestion {
   jokeContext: string;
   /** Silence-filler lines spoken if user doesn't respond (2 used, then skip) */
   prodLines: string[];
+  /** IDs of questions that should be excluded from the session if this one is asked */
+  excludes?: string[];
 }
 
 export const QUESTION_BANK: ComedyQuestion[] = [
@@ -38,6 +40,7 @@ export const QUESTION_BANK: ComedyQuestion[] = [
       "Where did you crawl out of? I'm genuinely asking.",
       "The city. The state. The general direction. Anything.",
     ],
+    excludes: ["city"],
   },
   {
     id: "job",
@@ -83,5 +86,6 @@ export const QUESTION_BANK: ComedyQuestion[] = [
       "The city. The town. The general region. Work with me here.",
       "Even a state would help. I'm not picky.",
     ],
+    excludes: ["hometown"],
   },
 ];

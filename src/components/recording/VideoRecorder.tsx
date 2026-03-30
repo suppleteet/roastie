@@ -12,18 +12,12 @@ const VideoRecorder = forwardRef<VideoRecorderHandle>(function VideoRecorder(_pr
 
   useImperativeHandle(ref, () => ({
     start(compositorStream: MediaStream, audioStream: MediaStream | null) {
-      // Guard against double-start (React StrictMode fires effects twice in dev,
-      // causing sessionStart.then() to schedule two recorder starts)
-      if (recorderRef.current?.state === "recording") {
-        console.warn("[recorder] already recording — ignoring duplicate start");
-        return;
-      }
+      // Guard against double-start (React StrictMode fires effects twice in dev)
+      if (recorderRef.current?.state === "recording") return;
       chunksRef.current = [];
 
       const videoTracks = compositorStream.getVideoTracks();
       const audioTracks = audioStream?.getAudioTracks() ?? [];
-      console.log("[recorder] video tracks:", videoTracks.length, videoTracks.map(t => `${t.label} (${t.readyState})`));
-      console.log("[recorder] audio tracks:", audioTracks.length, audioTracks.map(t => `${t.label} (${t.readyState})`));
 
       const tracks = [...videoTracks, ...audioTracks];
       if (tracks.length === 0) {
@@ -38,43 +32,34 @@ const VideoRecorder = forwardRef<VideoRecorderHandle>(function VideoRecorder(_pr
           : MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
           ? "video/webm;codecs=vp8"
           : "video/webm";
-      console.log("[recorder] mimeType:", mimeType);
 
       let recorder: MediaRecorder;
       try {
         recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 8_000_000 });
-      } catch (e) {
-        console.error("[recorder] MediaRecorder constructor failed:", e, "— retrying without bitrate");
+      } catch {
         try {
           recorder = new MediaRecorder(combined, { mimeType });
-        } catch (e2) {
-          console.error("[recorder] MediaRecorder constructor failed again:", e2, "— falling back to video/webm");
+        } catch {
           recorder = new MediaRecorder(combined, { mimeType: "video/webm" });
         }
       }
       recorder.ondataavailable = (e) => {
-        console.log("[recorder] chunk:", e.data.size, "bytes, total chunks:", chunksRef.current.length + 1);
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
       recorder.onerror = (e) => console.error("[recorder] error:", e);
       recorder.start(100);
       recorderRef.current = recorder;
-      console.log("[recorder] started, state:", recorder.state);
     },
 
     stop(): Promise<Blob> {
       return new Promise((resolve) => {
         const recorder = recorderRef.current;
         if (!recorder || recorder.state === "inactive") {
-          const blob = new Blob(chunksRef.current, { type: "video/webm" });
-          console.log("[recorder] stop (inactive) — blob size:", blob.size, "chunks:", chunksRef.current.length);
-          resolve(blob);
+          resolve(new Blob(chunksRef.current, { type: "video/webm" }));
           return;
         }
         recorder.onstop = () => {
-          const blob = new Blob(chunksRef.current, { type: "video/webm" });
-          console.log("[recorder] stop — blob size:", blob.size, "chunks:", chunksRef.current.length);
-          resolve(blob);
+          resolve(new Blob(chunksRef.current, { type: "video/webm" }));
         };
         recorder.stop();
       });

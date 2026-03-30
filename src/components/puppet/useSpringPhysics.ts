@@ -27,7 +27,7 @@ export function useSpringPhysics(
 ): React.MutableRefObject<SpringAxes> {
   // Initialize at sleeping position so there's no initial drift from zero
   const springs = useRef<SpringAxes>({
-    pitch: makeSpring(0.65),
+    pitch: makeSpring(-0.65),
     yaw: makeSpring(0),
     roll: makeSpring(0.05),
     bobY: makeSpring(-0.08),

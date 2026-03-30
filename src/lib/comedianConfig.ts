@@ -31,6 +31,12 @@ const defaults = {
 
   // Greeting pool
   generatedGreetingCount: 4,  // how many AI-generated greetings to pre-generate
+
+  // Latency experiments (temporary)
+  skipGreeting: true,         // skip greeting → jump straight to ask_question
+  skipPreGeneration: true,    // skip speculative pre-generation during wait_answer
+  skipFiller: true,           // skip "Hmm." / echo filler before joke delivery
+  singleJokeMode: true,      // generate 1 joke at a time, pipeline next during delivery
 };
 
 const windowOverride =

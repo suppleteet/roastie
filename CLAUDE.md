@@ -20,6 +20,7 @@
 | tailwindcss | ^3.4.19 | |
 | autoprefixer | ^10.4.27 | PostCSS plugin |
 | postcss | ^8.5.8 | |
+| ws | ^8.20.0 | WebSocket client for ElevenLabs TTS streaming (elTtsStream.ts) |
 
 ## AI Models in Use
 
@@ -72,13 +73,14 @@ State config lives in `src/lib/comedianBrainConfig.ts`. Timing in `src/lib/comed
 ## Architecture
 
 ```
-src/app/api/           Next.js API routes (analyze, generate-joke, generate-speak, roast, tts, tts-ws, vision, live-token, save-transcript, save-video, save-log, serve-video, open-videos-folder)
+src/app/api/           Next.js API routes (analyze, generate-joke, rephrase-question, generate-speak, roast, tts, tts-ws, vision, live-token, save-transcript, save-video, save-log, serve-video, open-videos-folder)
 src/components/puppet/ Three.js puppet inside R3F Canvas
 src/components/session/ SessionController (monologue), LiveSessionController (conversation)
 src/components/audio/  AudioPlayer (monologue), useMicCapture + usePcmPlayback + useVad (conversation)
 src/components/recording/ MediaRecorder + offscreen canvas compositor
 src/components/ui/     Screen overlays (landing, consent, HUD, share, DebugTranscript)
 src/lib/               Pure utilities, constants, prompts, personas, audioUtils, motionInference, elTtsStream
+src/lib/stateMachine/      State machine types, transitions, and configs (SessionPhase, BrainState, MotionState)
 src/lib/comedianBrain.ts   State machine class (conversation mode)
 src/lib/comedianBrainConfig.ts  Declarative STATE_CONFIG map
 src/lib/comedianConfig.ts  All timing/threshold tuning parameters (window-injectable for tests)

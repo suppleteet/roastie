@@ -1,8 +1,14 @@
 import { create } from "zustand";
-import type { MotionState } from "@/lib/motionStates";
+import type { MotionState } from "@/lib/stateMachine";
 import type { BurnIntensity } from "@/lib/prompts";
 import { DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
-import type { BrainState } from "@/lib/comedianBrainConfig";
+import type { BrainState } from "@/lib/stateMachine";
+import {
+  transition,
+  SESSION_TRANSITIONS,
+  type SessionPhase,
+  type SessionTrigger,
+} from "@/lib/stateMachine";
 
 export type ContentMode = "clean" | "vulgar";
 
@@ -33,13 +39,9 @@ export interface ConversationEvent {
   ts: number;
 }
 
-export type SessionPhase =
-  | "idle"
-  | "consent"
-  | "requesting-permissions"
-  | "roasting"
-  | "stopped"
-  | "sharing";
+// SessionPhase is now defined in @/lib/stateMachine/sessionPhase.ts
+// Re-export for backwards compatibility
+export type { SessionPhase } from "@/lib/stateMachine";
 
 export type SessionMode = "monologue" | "conversation";
 
@@ -67,6 +69,7 @@ interface SessionState {
   error: string | null;
   timingLog: string[];
   observations: string[];
+  visionSetting: string | null; // best guess at user's location from background analysis
   conversationEvents: ConversationEvent[];
   timeToFirstSpeechMs: number | null;
   hasSpokenThisSession: boolean;
@@ -76,7 +79,7 @@ interface SessionState {
   brainState: BrainState | null;
   currentQuestion: string | null;
   userAnswer: string;
-  isUserLaughing: boolean; // placeholder — detection not yet implemented
+  isUserLaughing: boolean; // vision-based: set when observations contain laugh keywords
 
   // Transcript history for debug panel
   transcriptHistory: { role: "user" | "puppet"; text: string; ts: number }[];
@@ -91,7 +94,7 @@ interface SessionState {
   clearPendingDebugTranscription: () => void;
 
   // actions
-  setPhase: (phase: SessionPhase) => void;
+  setPhase: (phase: SessionPhase, trigger: SessionTrigger) => void;
   setSessionMode: (mode: SessionMode) => void;
   setBurnIntensity: (intensity: BurnIntensity) => void;
   setContentMode: (mode: ContentMode) => void;
@@ -108,6 +111,7 @@ interface SessionState {
   logTiming: (entry: string) => void;
   clearTimingLog: () => void;
   setObservations: (obs: string[]) => void;
+  setVisionSetting: (setting: string | null) => void;
   addConversationEvent: (type: ConversationEvent["type"], text?: string) => void;
   clearConversationEvents: () => void;
   setTimeToFirstSpeechMs: (ms: number | null) => void;
@@ -144,6 +148,7 @@ const initialState = {
   error: null,
   timingLog: [] as string[],
   observations: [] as string[],
+  visionSetting: null as string | null,
   conversationEvents: [] as ConversationEvent[],
   timeToFirstSpeechMs: null as number | null,
   hasSpokenThisSession: false,
@@ -161,7 +166,12 @@ const initialState = {
 export const useSessionStore = create<SessionState>((set) => ({
   ...initialState,
 
-  setPhase: (phase) => set({ phase }),
+  setPhase: (phase, trigger) => {
+    const current = useSessionStore.getState().phase;
+    const event = transition(current, phase, SESSION_TRANSITIONS, trigger);
+    if (!event) return;
+    set({ phase });
+  },
   setSessionMode: (sessionMode) => set({ sessionMode }),
   setBurnIntensity: (burnIntensity) => set({ burnIntensity }),
   setContentMode: (contentMode) => set({ contentMode }),
@@ -188,6 +198,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     }),
   clearTimingLog: () => set({ timingLog: [] }),
   setObservations: (observations) => set({ observations }),
+  setVisionSetting: (visionSetting) => set({ visionSetting }),
   addConversationEvent: (type, text) =>
     set((s) => ({
       conversationEvents: [

@@ -1,14 +1,6 @@
-export type MotionState =
-  | "idle"
-  | "laugh"
-  | "energetic"
-  | "smug"
-  | "conspiratorial"
-  | "shocked"
-  | "emphasis"
-  | "thinking"
-  | "listening"
-  | "sleeping";
+// MotionState is canonically defined in @/lib/stateMachine/motionState.ts
+export type { MotionState } from "@/lib/stateMachine";
+import type { MotionState } from "@/lib/stateMachine";
 
 export interface MotionStateConfig {
   /** Spring stiffness override (higher = snappier) */
@@ -123,7 +115,7 @@ export const MOTION_STATE_CONFIGS: Record<MotionState, MotionStateConfig> = {
   sleeping: {
     stiffness: 15,
     damping: 8,
-    headPitch: 0.65,   // nodded forward
+    headPitch: -0.65,  // chin tucked down
     headYaw: 0,
     headRoll: 0.05,    // slight tilt
     bodyBob: -0.08,    // slumped down

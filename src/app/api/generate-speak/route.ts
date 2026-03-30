@@ -61,6 +61,8 @@ export interface GenerateSpeakRequest {
   observations?: string[];
   previousObservations?: string[];
   conversationSoFar?: string[];
+  knownFacts?: string[];
+  maxJokes?: number;
   imageBase64?: string;
 }
 
@@ -104,6 +106,10 @@ export async function POST(req: NextRequest) {
     contextLines.push(
       `CONVERSATION SO FAR:\n${body.conversationSoFar.slice(-6).join("\n")}`,
     );
+  if (body.knownFacts?.length)
+    contextLines.push(`KNOWN FACTS ABOUT THIS PERSON (sprinkle throwback references to earlier topics when it fits naturally): ${body.knownFacts.join(", ")}`);
+  if (body.maxJokes)
+    contextLines.push(`IMPORTANT: Generate exactly ${body.maxJokes} joke(s). No more.`);
 
   userParts.push({ text: contextLines.length > 0 ? contextLines.join("\n\n") : "Generate jokes based on the context." });
 
