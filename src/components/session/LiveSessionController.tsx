@@ -71,6 +71,10 @@ export default function LiveSessionController({
   const userSpeakingSpanRef = useRef<string | null>(null);
   const geminiWaitingSpanRef = useRef<string | null>(null);
 
+  // Vocal continuity: last text spoken by puppet — passed as previous_text to ElevenLabs so
+  // each TTS request inherits the intonation/prosody of what came before.
+  const lastSpokenTextRef = useRef<string>("");
+
   // Audio pipeline hooks
   const playback = usePcmPlayback();
   const mic = useMicCapture(
@@ -131,7 +135,9 @@ export default function LiveSessionController({
     ttsChainRef.current = ttsChainRef.current.then(async () => {
       if (ttsGenerationRef.current !== gen || !isRunningRef.current) return;
       if (motion) useSessionStore.getState().setActiveMotionState(motion, intensity ?? 0.7);
-      await streamTts(text.trim(), gen);
+      const previousText = lastSpokenTextRef.current;
+      lastSpokenTextRef.current = text.trim();
+      await streamTts(text.trim(), gen, previousText);
     });
   }
 
@@ -149,7 +155,7 @@ export default function LiveSessionController({
    * as they arrive, cutting time-to-first-audio by ~1-1.5s vs REST.
    * Returns a promise that resolves when the full sentence has been streamed.
    */
-  async function streamTts(text: string, gen: number): Promise<void> {
+  async function streamTts(text: string, gen: number, previousText?: string): Promise<void> {
     if (!isRunningRef.current) return;
     const ttsSpanId = useSessionStore.getState().beginSpan("tts", text.slice(0, 22));
     let firstChunk = true;
@@ -158,7 +164,7 @@ export default function LiveSessionController({
       const resp = await fetch("/api/tts-ws", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, ...(previousText ? { previousText } : {}) }),
       });
 
       if (!resp.ok || !resp.body || ttsGenerationRef.current !== gen) {
@@ -653,7 +659,7 @@ export default function LiveSessionController({
     isRunningRef.current = true;
     ttsChainRef.current = Promise.resolve();
     ttsGenerationRef.current++; // increment (not reset) — invalidates any in-flight TTS from prior session
-
+    lastSpokenTextRef.current = ""; // reset vocal continuity context for new session
 
     userSpeakingSpanRef.current = null;
     geminiWaitingSpanRef.current = null;

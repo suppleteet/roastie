@@ -15,9 +15,9 @@ export async function POST(req: NextRequest) {
     return new Response("ELEVENLABS_API_KEY not set", { status: 500 });
   }
 
-  let body: { text?: string };
+  let body: { text?: string; previousText?: string };
   try {
-    body = (await req.json()) as { text?: string };
+    body = (await req.json()) as { text?: string; previousText?: string };
   } catch {
     return new Response("Invalid JSON", { status: 400 });
   }
@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
     start(controller) {
       const cleanup = streamElTts({
         text: body.text!,
+        previousText: body.previousText,
         onAudioChunk: (base64Pcm) => {
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ type: "audio", chunk: base64Pcm })}\n\n`),

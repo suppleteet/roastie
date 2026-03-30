@@ -301,8 +301,8 @@ export class ComedianBrain {
       return;
     }
 
-    // Late transcription during generation — user's words are still arriving after VAD fired.
-    // Cancel stale generation, update the answer, and restart after a brief silence window.
+    // Late transcription during generation — STT tokens still arriving after silence timer fired.
+    // Use a very short silence window (half of answerSilenceMs) since speech is clearly ending.
     if (this.state === "generating") {
       this._clearTimers();
       this.deps.cancelSpeech();
@@ -315,7 +315,8 @@ export class ComedianBrain {
       } else {
         this._transition("wait_answer");
       }
-      this._startAnswerSilenceTimer();
+      // Short window — STT is actively streaming, speech is ending, no need for full answerSilenceMs
+      this._startLateSilenceTimer();
       return;
     }
 
@@ -675,6 +676,16 @@ export class ComedianBrain {
     }, COMEDIAN_CONFIG.answerSilenceMs);
   }
 
+  /** Shorter silence window used after late-transcription bounces — STT is clearly ending. */
+  private _startLateSilenceTimer(): void {
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    this.silenceTimer = setTimeout(() => {
+      if (this.state === "wait_answer" || this.state === "pre_generate") {
+        this._onAnswerComplete();
+      }
+    }, Math.round(COMEDIAN_CONFIG.answerSilenceMs / 2));
+  }
+
   private enterProdding(): void {
     const q = this.currentQuestion;
     if (!q) return;
@@ -852,8 +863,8 @@ export class ComedianBrain {
           return;
         }
 
-        // Bonus hopper joke — only attach when there are real jokes to accompany it
-        if (this.transitionCount % 4 === 0) {
+        // Bonus hopper joke — skip in singleJokeMode (pipeline handles sequencing)
+        if (!COMEDIAN_CONFIG.singleJokeMode && this.transitionCount % 4 === 0) {
           const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
           if (bonus) {
             this.deps.queueSpeak(bonus.text, bonus.motion, bonus.intensity);
@@ -1060,9 +1071,8 @@ export class ComedianBrain {
     );
   }
 
-  /** Speculatively rephrase + pre-queue the next question while the current joke plays.
-   *  Fires a lightweight LLM call to rephrase the question in the puppet's voice.
-   *  On success, calls queueSpeak so TTS is already streaming when the joke finishes. */
+  /** Pre-queue the next question's TTS while the current joke is still playing.
+   *  Calls queueSpeak immediately so TTS is already streaming when the joke finishes — no gap. */
   private _preQueueNextQuestion(): void {
     if (this.pendingFollowUp) return;
     if (this.visionOnlyMode) return;
@@ -1071,38 +1081,9 @@ export class ComedianBrain {
     if (!q) return;
 
     this.preQueuedQuestion = q;
-    this.preQueuedTextReady = false;
-
-    this._cancelRephrase();
-    const abort = new AbortController();
-    this.rephraseAbort = abort;
-
-    this.deps.logTiming(`brain: rephrasing question "${q.question.slice(0, 40)}"`);
-
-    fetch("/api/rephrase-question", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question: q.question,
-        persona: this.deps.getPersona(),
-        burnIntensity: this.deps.getBurnIntensity(),
-        knownFacts: this._getThrowbackContext(),
-      }),
-      signal: abort.signal,
-    })
-      .then((r) => r.json() as Promise<{ rephrased: string }>)
-      .then((data) => {
-        if (this.preQueuedQuestion?.id !== q.id) return; // stale — already consumed or cancelled
-        const text = (data.rephrased && data.rephrased.length > 0) ? data.rephrased : q.question;
-        this.preQueuedTextReady = true;
-        this.deps.logTiming(`brain: rephrase ready → "${text.slice(0, 60)}"`);
-        this.deps.queueSpeak(text, this.lastJokeMotion, this.lastJokeIntensity);
-      })
-      .catch(() => {
-        if (this.preQueuedQuestion?.id !== q.id) return; // stale or aborted
-        this.preQueuedTextReady = true;
-        this.deps.queueSpeak(q.question, this.lastJokeMotion, this.lastJokeIntensity);
-      });
+    this.preQueuedTextReady = true;
+    this.deps.queueSpeak(q.question, this.lastJokeMotion, this.lastJokeIntensity);
+    this.deps.logTiming(`brain: pre-queued next question TTS: "${q.question.slice(0, 40)}"`);
   }
 
   private _cancelRephrase(): void {

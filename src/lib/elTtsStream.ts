@@ -19,6 +19,8 @@ const EL_OUTPUT_FORMAT = "pcm_24000"; // 16-bit PCM at 24kHz — matches OUTPUT_
 interface ElTtsStreamOptions {
   /** Text to synthesize. Sent as a single chunk. */
   text: string;
+  /** Text spoken immediately before this request — helps ElevenLabs match intonation/prosody. */
+  previousText?: string;
   /** Called with each base64-encoded PCM audio chunk as it arrives. */
   onAudioChunk: (base64Pcm: string) => void;
   /** Called when all audio has been received. */
@@ -35,6 +37,7 @@ interface ElTtsStreamOptions {
  */
 export function streamElTts({
   text,
+  previousText,
   onAudioChunk,
   onDone,
   onError,
@@ -65,6 +68,7 @@ export function streamElTts({
         },
         xi_api_key: apiKey,
         generation_config: { chunk_length_schedule: [120, 160, 250, 290] },
+        ...(previousText ? { previous_text: previousText } : {}),
       }),
     );
 
@@ -134,10 +138,12 @@ export function streamElTtsAsync(
   text: string,
   onAudioChunk: (base64Pcm: string) => void,
   voiceId?: string,
+  previousText?: string,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     streamElTts({
       text,
+      previousText,
       onAudioChunk,
       onDone: resolve,
       onError: reject,
