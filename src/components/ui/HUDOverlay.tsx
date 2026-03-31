@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSessionStore } from "@/store/useSessionStore";
 
 interface Props {
@@ -17,6 +17,8 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
   const isUserLaughing = useSessionStore((s) => s.isUserLaughing);
   const brainState = useSessionStore((s) => s.brainState);
   const currentQuestion = useSessionStore((s) => s.currentQuestion);
+  const userAnswer = useSessionStore((s) => s.userAnswer);
+  const submitDebugTranscription = useSessionStore((s) => s.submitDebugTranscription);
 
   const isConversation = sessionMode === "conversation";
   const isRoasting = phase === "roasting";
@@ -53,11 +55,6 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
             You're talking…
           </span>
         )}
-        {isDev && isRoasting && isConversation && isUserLaughing && (
-          <span className="text-xs text-yellow-300 font-bold uppercase tracking-wider ml-2">
-            <span className="animate-pulse">LAUGH DETECTED</span>
-          </span>
-        )}
         {isDev && isRoasting && isConversation && brainState && (
           <span className="text-xs text-white/30 font-mono ml-2">{brainState}</span>
         )}
@@ -72,9 +69,24 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
         </div>
       )}
 
-      {/* Transcript moved to DebugTranscript panel (right side, collapsed by default) */}
+      {/* Answer correction bar — shows what was heard, lets user type a correction */}
+      {isRoasting && isConversation && (
+        <AnswerCorrectionBar
+          brainState={brainState}
+          userAnswer={userAnswer}
+          isListening={isListening}
+          onSubmit={submitDebugTranscription}
+        />
+      )}
 
-      {/* Debug amplitude bars */}
+      {/* Debug left-side panels */}
+      {isDev && isRoasting && isConversation && isUserLaughing && (
+        <div className="absolute bottom-52 left-4 pointer-events-none">
+          <span className="text-xs text-yellow-300 font-bold uppercase tracking-wider animate-pulse">
+            LAUGH DETECTED
+          </span>
+        </div>
+      )}
       {isDev && isRoasting && <DebugAmplitudeBars />}
 
       {/* Bottom buttons */}
@@ -104,6 +116,96 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Compact correction bar — shows heard text, lets user type a correction via keyboard. */
+function AnswerCorrectionBar({
+  brainState,
+  userAnswer,
+  isListening,
+  onSubmit,
+}: {
+  brainState: string | null;
+  userAnswer: string;
+  isListening: boolean;
+  onSubmit: (text: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [correctionText, setCorrectionText] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const isAnswerPhase = isListening && (
+    brainState === "wait_answer" || brainState === "prodding" || brainState === "pre_generate"
+  );
+  // Also show briefly during generating so user can correct before joke plays
+  const showBar = isAnswerPhase || brainState === "generating";
+
+  // Auto-focus when editing starts
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  // Reset editing state when leaving answer phase
+  useEffect(() => {
+    if (!showBar) {
+      setEditing(false);
+      setCorrectionText("");
+    }
+  }, [showBar]);
+
+  if (!showBar) return null;
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const text = correctionText.trim();
+    if (!text) return;
+    onSubmit(text);
+    setEditing(false);
+    setCorrectionText("");
+  }
+
+  return (
+    <div className="absolute top-16 left-1/2 -translate-x-1/2 pointer-events-auto max-w-md w-full px-4">
+      {editing ? (
+        <form onSubmit={handleSubmit} className="flex gap-2">
+          <input
+            ref={inputRef}
+            type="text"
+            value={correctionText}
+            onChange={(e) => setCorrectionText(e.target.value)}
+            placeholder="Type your actual answer…"
+            className="flex-1 bg-black/80 border border-cyan-400/50 rounded-full px-4 py-2 text-sm text-white placeholder:text-white/30 outline-none focus:border-cyan-400 backdrop-blur"
+            autoComplete="off"
+          />
+          <button
+            type="submit"
+            className="bg-cyan-600/60 hover:bg-cyan-600/80 border border-cyan-400/40 rounded-full px-4 py-2 text-sm text-white font-medium backdrop-blur"
+          >
+            Send
+          </button>
+          <button
+            type="button"
+            onClick={() => { setEditing(false); setCorrectionText(""); }}
+            className="text-white/40 hover:text-white/70 text-sm px-2"
+          >
+            ✕
+          </button>
+        </form>
+      ) : (
+        userAnswer && (
+          <button
+            onClick={() => { setEditing(true); setCorrectionText(userAnswer); }}
+            className="w-full bg-black/50 hover:bg-black/70 border border-white/10 hover:border-cyan-400/30 rounded-full px-4 py-2 text-sm text-white/60 backdrop-blur transition-all text-left truncate"
+            title="Click to correct what was heard"
+          >
+            <span className="text-white/30 mr-2">Heard:</span>
+            {userAnswer}
+            <span className="text-cyan-400/50 ml-2 text-xs">(click to correct)</span>
+          </button>
+        )
+      )}
     </div>
   );
 }

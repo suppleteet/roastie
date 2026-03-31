@@ -12,6 +12,17 @@ import {
 
 export type ContentMode = "clean" | "vulgar";
 
+/** Ambient context derived from geolocation — time-of-day, weather, city. */
+export interface AmbientContext {
+  city: string;
+  region: string;
+  timeOfDay: string; // "late night", "early morning", "morning", "afternoon", "evening", "night"
+  localTime: string; // "2:30 AM", "11:15 PM" etc
+  weather?: string;  // "clear skies", "raining", "overcast", etc
+  tempF?: number;
+  tempC?: number;
+}
+
 export type ConversationEventType = "user-start" | "user-end" | "ai-speech" | "ai-done" | "interrupted" | "listening" | "rotate" | "user-laugh";
 
 export type TimelineRow = "user" | "gemini" | "tts" | "vision" | "session";
@@ -70,6 +81,8 @@ interface SessionState {
   timingLog: string[];
   observations: string[];
   visionSetting: string | null; // best guess at user's location from background analysis
+  locationConsent: boolean; // user opted in to share location
+  ambientContext: AmbientContext | null; // time-of-day, weather, city from geolocation
   conversationEvents: ConversationEvent[];
   timeToFirstSpeechMs: number | null;
   hasSpokenThisSession: boolean;
@@ -93,6 +106,13 @@ interface SessionState {
   submitDebugTranscription: (text: string) => void;
   clearPendingDebugTranscription: () => void;
 
+  // Dev voice notes: gesture-triggered recording
+  pendingDevNoteResume: boolean;
+  requestDevNoteResume: () => void;
+  clearPendingDevNoteResume: () => void;
+  devNoteCount: number;
+  incrementDevNoteCount: () => void;
+
   // actions
   setPhase: (phase: SessionPhase, trigger: SessionTrigger) => void;
   setSessionMode: (mode: SessionMode) => void;
@@ -112,6 +132,8 @@ interface SessionState {
   clearTimingLog: () => void;
   setObservations: (obs: string[]) => void;
   setVisionSetting: (setting: string | null) => void;
+  setLocationConsent: (consent: boolean) => void;
+  setAmbientContext: (ctx: AmbientContext | null) => void;
   addConversationEvent: (type: ConversationEvent["type"], text?: string) => void;
   clearConversationEvents: () => void;
   setTimeToFirstSpeechMs: (ms: number | null) => void;
@@ -149,6 +171,8 @@ const initialState = {
   timingLog: [] as string[],
   observations: [] as string[],
   visionSetting: null as string | null,
+  locationConsent: false,
+  ambientContext: null as AmbientContext | null,
   conversationEvents: [] as ConversationEvent[],
   timeToFirstSpeechMs: null as number | null,
   hasSpokenThisSession: false,
@@ -161,6 +185,8 @@ const initialState = {
   timelineSpans: [] as TimelineSpan[],
   sessionStartTs: null as number | null,
   pendingDebugTranscription: null as string | null,
+  pendingDevNoteResume: false,
+  devNoteCount: 0,
 };
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -199,6 +225,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   clearTimingLog: () => set({ timingLog: [] }),
   setObservations: (observations) => set({ observations }),
   setVisionSetting: (visionSetting) => set({ visionSetting }),
+  setLocationConsent: (locationConsent) => set({ locationConsent }),
+  setAmbientContext: (ambientContext) => set({ ambientContext }),
   addConversationEvent: (type, text) =>
     set((s) => ({
       conversationEvents: [
@@ -241,5 +269,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   setSessionStartTs: (sessionStartTs) => set({ sessionStartTs }),
   submitDebugTranscription: (text) => set({ pendingDebugTranscription: text }),
   clearPendingDebugTranscription: () => set({ pendingDebugTranscription: null }),
+  requestDevNoteResume: () => set({ pendingDevNoteResume: true }),
+  clearPendingDevNoteResume: () => set({ pendingDevNoteResume: false }),
+  incrementDevNoteCount: () => set((s) => ({ devNoteCount: s.devNoteCount + 1 })),
   reset: () => set(initialState),
 }));

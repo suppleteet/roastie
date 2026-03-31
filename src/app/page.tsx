@@ -17,6 +17,7 @@ import { useCompositor } from "@/components/recording/useCompositor";
 import { PERSONA_IDS, PERSONAS } from "@/lib/personas";
 import RigEditMode from "@/engine/ui/RigEditMode";
 import { useRigEditStore } from "@/engine/store/RigEditStore";
+import DevNoteRecorder from "@/components/ui/DevNoteRecorder";
 
 /**
  * Top-level router — decides between edit mode and the main app.
@@ -43,6 +44,7 @@ function MainApp() {
   const setActivePersona = useSessionStore((s) => s.setActivePersona);
   const hasSpokenThisSession = useSessionStore((s) => s.hasSpokenThisSession);
   const lastVisionCallTs = useSessionStore((s) => s.lastVisionCallTs);
+  const brainState = useSessionStore((s) => s.brainState);
   const IS_DEV = process.env.NODE_ENV !== "production";
   const [debugMode, setDebugMode] = useState(IS_DEV);
   const [mockMode, setMockMode] = useState(false);
@@ -175,6 +177,37 @@ function MainApp() {
         setPhase("idle", "PERMISSIONS_DENIED");
       });
   }, [phase, sessionMode, webcamStream, setPhase, setError]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Request geolocation + ambient context when session starts (if user opted in)
+  useEffect(() => {
+    if (phase !== "roasting") return;
+    const { locationConsent } = useSessionStore.getState();
+    if (!locationConsent) return;
+    if (!navigator.geolocation) return;
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude: lat, longitude: lon } = pos.coords;
+        logTiming(`geo: got location (${lat.toFixed(2)}, ${lon.toFixed(2)})`);
+        fetch("/api/ambient-context", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat, lon }),
+          signal: AbortSignal.timeout(8000),
+        })
+          .then((r) => r.json())
+          .then((ctx) => {
+            if (ctx.city) {
+              useSessionStore.getState().setAmbientContext(ctx);
+              logTiming(`geo: ambient context ready — ${ctx.city}, ${ctx.timeOfDay}, ${ctx.weather ?? "no weather"}`);
+            }
+          })
+          .catch(() => logTiming("geo: ambient-context fetch failed"));
+      },
+      () => logTiming("geo: permission denied or unavailable"),
+      { timeout: 10000, maximumAge: 300000 },
+    );
+  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wire webcam video element ref once stream is ready
   useEffect(() => {
@@ -352,6 +385,9 @@ function MainApp() {
             <div className="absolute inset-0 flex items-center justify-center bg-black/70">
               <p className="text-white text-lg font-bold animate-pulse">Requesting camera…</p>
             </div>
+          )}
+          {phase === "roasting" && brainState === "dev_note" && (
+            <DevNoteRecorder mode="gesture" />
           )}
         </div>
       )}

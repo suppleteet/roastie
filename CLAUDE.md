@@ -73,7 +73,9 @@ ComedianBrain ──→ /api/generate-joke (Gemini Flash) → joke text + motion
 
 ## Brain State Machine
 
-States (in order): `greeting` → `vision_jokes` → `ask_question` → `wait_answer` → `pre_generate` → `generating` → `delivering` → `check_vision` → `vision_react` (or back to `ask_question`)
+States (in order): `greeting` → `ask_question` → `wait_answer` → `pre_generate` → `generating` → `delivering` → `check_vision` → `vision_react` (or back to `ask_question`)
+
+Note: `greeting` is LLM-generated (not canned strings) and includes the first vision joke. The old `vision_jokes` state is still defined but greeting now advances directly to `ask_question`.
 
 Silence states: `prodding` (after answerWaitMs with no speech), `redirecting` (irrelevant answer).
 
@@ -82,7 +84,7 @@ State config lives in `src/lib/comedianBrainConfig.ts`. Timing in `src/lib/comed
 ## Architecture
 
 ```
-src/app/api/           Next.js API routes (analyze, generate-joke, rephrase-question, generate-speak, roast, tts, tts-ws, vision, live-token, save-transcript, save-video, save-log, serve-video, open-videos-folder)
+src/app/api/           Next.js API routes (analyze, generate-joke, rephrase-question, generate-speak, roast, tts, tts-ws, vision, live-token, save-transcript, save-video, save-log, serve-video, open-videos-folder, ambient-context)
 src/components/puppet/ Three.js puppet inside R3F Canvas
 src/components/session/ SessionController (monologue), LiveSessionController (conversation)
 src/components/audio/  AudioPlayer (monologue), useMicCapture + usePcmPlayback + useVad (conversation)
@@ -126,7 +128,7 @@ src/puppet/            Paper-thin puppet-specific layer
 6. **LiveSessionController uses getState()**: All store access in WebSocket callbacks and long-lived closures must use `useSessionStore.getState()` to avoid stale closures. Only `phase` is subscribed via selector (for lifecycle).
 7. **ComedianBrain controls all speech**: In conversation mode, DO NOT route Gemini output to TTS. The brain calls `queueSpeak()` directly. Gemini Live is STT/VAD only.
 8. **Mic gating**: `useMicCapture` callback checks `brain.isAudioActive()` before sending audio. Mic is `"passive"` (keeps Gemini VAD warm) in most states; only `"off"` during `greeting` and `vision_jokes`. `"listening"` in `wait_answer`, `prodding`, `pre_generate`.
-10. **LLM-generated greetings**: `enterGreeting()` calls `_generateJoke({ context: "greeting" })` asynchronously — no hardcoded greeting strings. Greeting and vision-opening prefetch fire in parallel. The `.then()` callback guards against stale state with `if (this.state !== "greeting") return`.
+10. **LLM-generated greetings**: `enterGreeting()` waits for vision, then calls `_generateJoke({ context: "greeting" })` — always LLM-generated, never canned strings. The greeting IS the first vision joke (no separate `vision_jokes` state). The `.then()` callback guards against stale state with `if (this.state !== "greeting") return`.
 9. **TTS drain detection**: LiveSessionController uses `playback.isQueueEmpty()` in a rAF loop to detect when speech finishes, then calls `brain.onTtsQueueDrained()`.
 11. **Engine signals abstraction**: Rig components (JawFlap, HeadMotion) NEVER read from `useSessionStore` directly. They read from `TickContext.signals: Record<string, number>`. In session mode the consumer populates this from the store; in edit mode it comes from `RigEditStore.previewSignals`. Component signal declarations (`SignalDef[]`) auto-generate the preview sliders.
 12. **No per-frame allocations in engine**: Inside `tick()` callbacks, NEVER use `new THREE.Vector3()` / `new THREE.Quaternion()` / `new THREE.Matrix4()`. All scratch objects must be pre-allocated as class fields and mutated via `.set()` / `.copy()`.

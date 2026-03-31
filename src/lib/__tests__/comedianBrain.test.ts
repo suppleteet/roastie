@@ -63,6 +63,7 @@ function makeDeps(overrides?: Partial<ComedianBrainDeps>): ComedianBrainDeps {
     getContentMode: vi.fn().mockReturnValue("clean"),
     getObservations: vi.fn().mockReturnValue([]),
     getVisionSetting: vi.fn().mockReturnValue(null),
+    getAmbientContext: vi.fn().mockReturnValue(null),
     setBrainState: vi.fn(),
     setCurrentQuestion: vi.fn(),
     setUserAnswer: vi.fn(),
@@ -77,12 +78,13 @@ function getStates(deps: ComedianBrainDeps): Array<BrainState | null> {
   return (deps.setBrainState as ReturnType<typeof vi.fn>).mock.calls.map((c: any[]) => c[0] as BrainState | null);
 }
 
-/** Drive brain from start → wait_answer */
-function driveToWaitAnswer(brain: ComedianBrain): void {
+/** Drive brain from start → wait_answer.
+ *  Greeting is now LLM-generated (async), so we must flush microtasks. */
+async function driveToWaitAnswer(brain: ComedianBrain): Promise<void> {
   brain.start();
-  brain.onTtsQueueDrained();  // greeting drain
-  brain.onVisionUpdate([]);   // vision ready → enterVisionJokes
-  brain.onTtsQueueDrained();  // vision_jokes → ask_question
+  brain.onVisionUpdate([]);   // vision ready → fires greeting generation
+  await vi.advanceTimersByTimeAsync(0); // flush microtasks
+  brain.onTtsQueueDrained();  // greeting drain → ask_question
   brain.onTtsQueueDrained();  // ask_question → wait_answer
 }
 
@@ -112,12 +114,14 @@ describe("ComedianBrain — start() / greeting", () => {
     expect(getStates(deps)).toContain("greeting");
   });
 
-  it("queues a greeting TTS immediately from persona greetings", () => {
+  it("generates greeting via LLM (not canned strings)", async () => {
+    vi.useFakeTimers();
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
     brain.start();
-    expect(deps.queueSpeak).toHaveBeenCalledTimes(1);
-    expect(deps.queueSpeak).toHaveBeenCalledWith("Test greeting.", "energetic", 0.8);
+    brain.onVisionUpdate([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.queueSpeak).toHaveBeenCalledWith("You look like a mistake.", "smug", 0.8);
   });
 
   it("isListening() returns false in greeting", () => {
@@ -132,84 +136,87 @@ describe("ComedianBrain — start() / greeting", () => {
 // ─── Vision flow ─────────────────────────────────────────────────────────────
 
 describe("ComedianBrain — vision flow", () => {
-  it("advances from greeting when TTS drains AND vision arrives", () => {
-    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
-    const deps = makeDeps();
-    const brain = new ComedianBrain(deps);
-    brain.start();
-    brain.onTtsQueueDrained();
-    brain.onVisionUpdate([]); // empty still signals vision complete
-    const states = getStates(deps);
-    expect(states).toContain("vision_jokes");
-  });
-
-  it("does NOT advance if only TTS drains (vision not ready)", () => {
-    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
-    const deps = makeDeps();
-    const brain = new ComedianBrain(deps);
-    brain.start();
-    brain.onTtsQueueDrained();
-    const states = getStates(deps);
-    expect(states).not.toContain("vision_jokes");
-    expect(states).not.toContain("ask_question");
-  });
-
-  it("advances with greeting timeout even if vision never arrives", () => {
+  it("advances from greeting when TTS drains AND vision arrives", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
     brain.start();
-    brain.onTtsQueueDrained(); // drain greeting
-    vi.advanceTimersByTime(3100); // trigger greetingVisionTimeout
+    brain.onVisionUpdate([]);
+    await vi.advanceTimersByTimeAsync(0);
+    brain.onTtsQueueDrained();
     const states = getStates(deps);
-    // Should have advanced past greeting
-    expect(states.length).toBeGreaterThan(1);
+    expect(states).toContain("ask_question");
+  });
+
+  it("does NOT advance if only TTS drains (vision not ready, generation not resolved)", () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    brain.start();
+    brain.onTtsQueueDrained();
+    const states = getStates(deps);
+    expect(states).not.toContain("ask_question");
+  });
+
+  it("advances with greeting timeout even if vision never arrives", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    brain.start();
+    await vi.advanceTimersByTimeAsync(3100);
+    brain.onTtsQueueDrained();
+    const states = getStates(deps);
+    expect(states).toContain("ask_question");
   });
 });
 
 // ─── Q&A cycle ───────────────────────────────────────────────────────────────
 
 describe("ComedianBrain — Q&A cycle", () => {
-  it("reaches wait_answer after full startup flow", () => {
+  it("reaches wait_answer after full startup flow", async () => {
+    vi.useFakeTimers();
     vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
-    driveToWaitAnswer(brain);
+    await driveToWaitAnswer(brain);
     expect(getStates(deps)).toContain("wait_answer");
     expect(brain.isListening()).toBe(true);
   });
 
-  it("transitions to wait_answer from ask_question after question TTS drains", () => {
+  it("transitions to wait_answer from ask_question after question TTS drains", async () => {
+    vi.useFakeTimers();
     vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
     brain.start();
-    brain.onTtsQueueDrained();
     brain.onVisionUpdate([]);
-    brain.onTtsQueueDrained(); // vision_jokes → ask_question (queues question TTS)
-    brain.onTtsQueueDrained(); // ask_question drain → wait_answer
+    await vi.advanceTimersByTimeAsync(0);
+    brain.onTtsQueueDrained();
+    brain.onTtsQueueDrained();
 
     const states = getStates(deps);
     expect(states).toContain("ask_question");
     expect(states).toContain("wait_answer");
   });
 
-  it("routes inputTranscription to answerBuffer in wait_answer", () => {
-    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
-    const deps = makeDeps();
-    const brain = new ComedianBrain(deps);
-    driveToWaitAnswer(brain);
-    brain.onInputTranscription("My name is Mike");
-    expect(deps.setUserAnswer).toHaveBeenCalledWith("My name is Mike");
-  });
-
-  it("transitions to pre_generate after enough words", () => {
+  it("routes inputTranscription to answerBuffer in wait_answer", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
-    driveToWaitAnswer(brain);
+    await driveToWaitAnswer(brain);
+    brain.onInputTranscription("My name is Mike");
+    expect(deps.setUserAnswer).toHaveBeenCalledWith("My name is Mike");
+  });
+
+  it("transitions to pre_generate after enough words", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
     brain.onInputTranscription("My name is Mike Johnson"); // 4 words >= 3
     expect(getStates(deps)).toContain("pre_generate");
   });
@@ -219,9 +226,8 @@ describe("ComedianBrain — Q&A cycle", () => {
     vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
-    driveToWaitAnswer(brain);
+    await driveToWaitAnswer(brain);
     brain.onInputTranscription("My name is Mike Johnson plumber");
-    // Advance past silence timer (answerSilenceMs = 1500)
     vi.advanceTimersByTime(1600);
     expect(getStates(deps)).toContain("generating");
   });
@@ -230,23 +236,23 @@ describe("ComedianBrain — Q&A cycle", () => {
 // ─── Silence handling ─────────────────────────────────────────────────────────
 
 describe("ComedianBrain — silence handling", () => {
-  it("transitions to prodding after answerWaitMs silence", () => {
+  it("transitions to prodding after answerWaitMs silence", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
-    driveToWaitAnswer(brain);
-    vi.advanceTimersByTime(6100); // > answerWaitMs (6000ms)
+    await driveToWaitAnswer(brain);
+    vi.advanceTimersByTime(6100);
     expect(getStates(deps)).toContain("prodding");
   });
 
-  it("cancels prod when inputTranscription arrives during prodding", () => {
+  it("cancels prod when inputTranscription arrives during prodding", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
-    driveToWaitAnswer(brain);
-    vi.advanceTimersByTime(6100); // → prodding
+    await driveToWaitAnswer(brain);
+    vi.advanceTimersByTime(6100);
     brain.onInputTranscription("Wait I have something to say");
     expect(deps.cancelSpeech).toHaveBeenCalled();
     expect(getStates(deps)).toContain("wait_answer");
@@ -258,10 +264,11 @@ describe("ComedianBrain — silence handling", () => {
 describe("ComedianBrain — irrelevant answers", () => {
   it("transitions to redirecting when API returns relevant:false", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("fetch", mockFetchResponse(IRRELEVANT_RESPONSE));
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
-    driveToWaitAnswer(brain);
+    await driveToWaitAnswer(brain);
+    vi.stubGlobal("fetch", mockFetchResponse(IRRELEVANT_RESPONSE));
     brain.onInputTranscription("something completely unrelated");
     vi.advanceTimersByTime(600); // trigger silence timer
     // Need to let the async fetch resolve
@@ -310,7 +317,7 @@ describe("ComedianBrain — follow-up questions", () => {
     vi.stubGlobal("fetch", mockFetchResponse(followUpResponse));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
-    driveToWaitAnswer(brain);
+    await driveToWaitAnswer(brain);
     brain.onInputTranscription("I am a plumber");
     vi.advanceTimersByTime(600);
     await vi.runAllTimersAsync();
@@ -330,7 +337,7 @@ describe("ComedianBrain — vision react", () => {
       getObservations: vi.fn().mockReturnValue(["a dog appeared on camera"]),
     });
     const brain = new ComedianBrain(deps);
-    driveToWaitAnswer(brain);
+    await driveToWaitAnswer(brain);
 
     // Simulate user answering and joke being delivered
     brain.onInputTranscription("My name is Alex Johnson from Seattle");

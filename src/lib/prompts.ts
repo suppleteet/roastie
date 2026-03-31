@@ -127,12 +127,21 @@ Preferred motions for your character: ${p.motionPreferences.join(", ")}
 score: 1-10 self-assessed funniness (10 = best joke you've ever told)`;
 
   const contextInstructions: Record<JokeContext, string> = {
-    greeting: `## Task: Opening Greeting
-Generate 1-2 sentences — your punchy opening for this specific person.
-If you can see them, reference something specific you notice immediately.
-Max 20 words per sentence. Punchline at the end of each. No wind-up.
+    greeting: `## Task: Opening Greeting + First Visual Reaction
+You are seeing this person for the first time. Your greeting must react to what you SEE.
+Do NOT use generic greetings — reference specific visual details immediately.
+
+STYLE: You're an old, grizzled comedian getting a first look at someone. Think:
+- "Ohhh, what am I looking at here?" then a specific observation joke
+- "Let me get a good look at you... wow, okay" then a roast
+- "Oh, this is gonna be fun" then zero in on something specific
+- Start with a drawn-out reaction (ohhh, wow, oh boy, jesus, etc.) then hit the joke
+
+The greeting should feel like a single natural moment — the reaction to seeing them IS the greeting.
+2-3 sentences: drawn-out first reaction + 1-2 sharp observation jokes about what you see.
+Max 20 words per sentence. Punchline at the end. No wind-up.
 Set "relevant": true. No "followUp". No "redirect".
-Generate 1-2 jokes.`,
+Generate 2-3 jokes.`,
 
     vision_opening: `## Task: First Vision Joke
 You've just seen this person for the first time. Generate exactly 1 sharp opening observation joke.
@@ -155,9 +164,11 @@ Do NOT open your first joke with the same word or phrase — skip straight to th
 
 PIPELINE RULE: If JOKES ALREADY DELIVERED THIS CYCLE is provided, those jokes have already played aloud.
 Do NOT re-introduce the answer, repeat the question format, or echo the user's words again.
-Do NOT open with "So your [answer]..." or "You said [answer]..." — that's been done.
-Instead: escalate the roast further, pivot to a new angle, or riff off what was said.
-Treat this as the next joke in a set — build momentum, don't restart.
+Do NOT open with "So your [answer]..." or "You said [answer]..." or "[answer]? [joke]" — that's been done.
+Do NOT start with the same opener as any previous joke in the cycle ("Oh,", "Well,", "So,", "Ah,", "Ha," etc.).
+Each successive joke must feel like a SET — it continues naturally from what was just said, not a fresh start.
+Instead: escalate the roast further, pivot to a new angle, or riff off the PREVIOUS JOKE.
+Treat this as the next joke in a tight comedy set — build momentum, don't restart.
 
 BACKGROUND RULE:
 - NEVER joke about specific background objects (a bookshelf, a poster, a lamp, a chair, etc.)
@@ -171,6 +182,12 @@ provide a witty redirect in "redirect" that acknowledges what they said but stee
 
 Follow-up: If the answer naturally invites a follow-up (surprising detail, interesting reveal),
 include a short punchy "followUp" question. Keep it to one follow-up per topic — don't linger.
+FOLLOW-UP RULES:
+- Must be open-ended ("What's the worst part about that?") or yes/no ("Do you actually enjoy that?").
+- NEVER use A/B either-or format ("Is it more X or Y?", "Would you rather X or Y?").
+- The follow-up must be a real question the user can answer — not rhetorical.
+  (Rhetorical questions are great IN jokes, but don't put them in "followUp" because the system will wait for an answer.)
+- The follow-up should be a funny setup — a question that makes ANY answer roastable.
 
 Throwback references: If KNOWN FACTS are provided, sprinkle in references to earlier answers
 throughout your jokes. Example: if you learned their name is Mike and they're a dentist, and now

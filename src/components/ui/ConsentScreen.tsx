@@ -14,6 +14,8 @@ export default function ConsentScreen() {
   const burnIntensity = useSessionStore((s) => s.burnIntensity);
   const setBurnIntensity = useSessionStore((s) => s.setBurnIntensity);
   const setPhase = useSessionStore((s) => s.setPhase);
+  const locationConsent = useSessionStore((s) => s.locationConsent);
+  const setLocationConsent = useSessionStore((s) => s.setLocationConsent);
 
   function handleReady() {
     setPhase("requesting-permissions", "CONSENT_ACCEPTED");
@@ -55,6 +57,19 @@ export default function ConsentScreen() {
         <p>📷 <strong>Camera Disclosure:</strong> Your webcam feed is used only to generate the roast. Frames are sent to an AI vision API. Nothing is stored.</p>
         <p>🎥 <strong>Recording:</strong> A video of the session is generated locally for sharing. It never leaves your device unless you share it.</p>
       </div>
+
+      {/* Location opt-in */}
+      <label className="flex items-center gap-3 mb-8 max-w-sm cursor-pointer select-none group">
+        <input
+          type="checkbox"
+          checked={locationConsent}
+          onChange={(e) => setLocationConsent(e.target.checked)}
+          className="w-5 h-5 rounded accent-cyan-500 cursor-pointer"
+        />
+        <span className="text-sm text-gray-300 text-left group-hover:text-white transition-colors">
+          <strong className="text-white">Share my location</strong> — lets the comedian roast your city, weather, and what you&apos;re doing up this late
+        </span>
+      </label>
 
       <button
         onClick={handleReady}

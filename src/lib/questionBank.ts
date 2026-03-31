@@ -7,8 +7,8 @@
  * Question text guidelines:
  * - Short and punchy — ElevenLabs reads them with natural prosody when they have
  *   a clear transition opener (e.g., "Alright —" or "Now tell me —")
- * - Stick to quick-answer questions (name, location, status) — avoid open-ended
- *   questions that require long searches or stories
+ * - Open-ended or yes/no only — NEVER A/B either-or format
+ * - Each question should feel like a setup for roastable material
  */
 
 export interface ComedyQuestion {
@@ -61,21 +61,30 @@ export const QUESTION_BANK: ComedyQuestion[] = [
     ],
   },
   {
-    id: "pets",
-    question: "Do you have any pets?",
-    jokeContext: "Pet owner stereotypes — what kind of pet says about their personality. Dog people vs cat people. No pet = roast the loneliness.",
-    prodLines: [
-      "Any animals in your life? Or just the one staring at me right now?",
-      "Dog, cat, fish, emotional support iguana — anything.",
-    ],
-  },
-  {
     id: "age",
     question: "How old are you?",
     jokeContext: "Age roast — too young to know better, too old to be doing this, whatever the number implies about their life choices.",
     prodLines: [
       "The number. Just the number.",
       "It's okay. I'll be gentle. Probably.",
+    ],
+  },
+  {
+    id: "proud_of",
+    question: "What's the thing you're most proud of in your life?",
+    jokeContext: "Whatever they're proud of, undercut it — the achievement is the setup, the roast deflates their ego. If humble, roast the low bar.",
+    prodLines: [
+      "Come on, there must be something. Even if it's participation-trophy level.",
+      "Anything. Literally anything you've done right.",
+    ],
+  },
+  {
+    id: "hobby",
+    question: "What do you do for fun?",
+    jokeContext: "Hobby stereotypes, what their choice of leisure says about their personality. Boring hobby = boring person. Wild hobby = overcompensating.",
+    prodLines: [
+      "You must do something besides stare at a screen. Right?",
+      "Fun. Enjoyment. Recreation. Any of those ring a bell?",
     ],
   },
   {

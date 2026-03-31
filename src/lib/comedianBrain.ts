@@ -49,6 +49,7 @@ export interface ComedianBrainDeps {
   getContentMode: () => "clean" | "vulgar";
   getObservations: () => string[];
   getVisionSetting: () => string | null;
+  getAmbientContext: () => import("@/store/useSessionStore").AmbientContext | null;
   setBrainState: (state: BrainState | null) => void;
   setCurrentQuestion: (q: string | null) => void;
   setUserAnswer: (ans: string) => void;
@@ -96,6 +97,9 @@ function smartJoin(buffer: string, chunk: string): string {
   // Previous buffer ends with a letter and chunk starts with lowercase letter —
   // likely a word continuation ("Ye" + "s" → "Yes")
   if (/[a-zA-Z]$/.test(lastChar) && /^[a-z]/.test(firstChar)) return buffer + chunk;
+
+  // Digit followed by digit — likely a number continuation ("4" + "2" → "42")
+  if (/[0-9]$/.test(lastChar) && /^[0-9]/.test(firstChar)) return buffer + chunk;
 
   // Digit/letter followed by uppercase — likely compound ("3" + "D" → "3D")
   if (/[a-zA-Z0-9]$/.test(lastChar) && /^[A-Z]$/.test(chunk)) return buffer + chunk;
@@ -167,6 +171,7 @@ export class ComedianBrain {
   // Timers
   private silenceTimer: ReturnType<typeof setTimeout> | null = null;
   private prodTimer: ReturnType<typeof setTimeout> | null = null;
+  private devNoteTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Availability flags
   private micAvailable = true;
@@ -223,13 +228,11 @@ export class ComedianBrain {
       return;
     }
 
-    // If vision observations are already available (pre-scanned), skip greeting → vision jokes
+    // If vision observations are already available (pre-scanned), mark vision ready immediately
     const existingObs = this.deps.getObservations();
     if (existingObs.length > 0 && this.cameraAvailable) {
-      this.deps.logTiming("brain: observations pre-loaded, skipping greeting → vision_jokes");
-      this.previousObservations = [];
-      this.enterVisionJokes();
-      return;
+      this.deps.logTiming("brain: observations pre-loaded — greeting will use them immediately");
+      this.visionReadyForGreeting = true;
     }
 
     this.enterGreeting();
@@ -271,6 +274,37 @@ export class ComedianBrain {
     this.cameraAvailable = available;
   }
 
+  // ─── Dev voice notes (gesture-triggered) ──────────────────────────────────────
+
+  /** Called when vision detects thumbs-down — pauses the brain for a voice note. */
+  enterDevNote(): void {
+    if (!COMEDIAN_CONFIG.devNotesEnabled || this.state === "dev_note") return;
+    this._clearTimers();
+    this._transition("dev_note");
+    this.deps.setMotion("idle", 0.3);
+    this.deps.cancelSpeech();
+    this.deps.logTiming("brain: dev_note — thumbs down detected, pausing");
+    this.devNoteTimer = setTimeout(() => {
+      this.devNoteTimer = null;
+      if (this.state === "dev_note") {
+        this.deps.logTiming("brain: dev_note timeout — auto-resuming");
+        this._advanceFromDevNote();
+      }
+    }, COMEDIAN_CONFIG.devNoteTimeoutMs);
+  }
+
+  /** Called when vision detects thumbs-up — resumes the brain from dev_note. */
+  resumeFromDevNote(): void {
+    if (this.state !== "dev_note") return;
+    this.deps.logTiming("brain: dev_note — thumbs up detected, resuming");
+    this._advanceFromDevNote();
+  }
+
+  private _advanceFromDevNote(): void {
+    if (this.devNoteTimer) { clearTimeout(this.devNoteTimer); this.devNoteTimer = null; }
+    this.enterCheckVision();
+  }
+
   /**
    * Called by Silero VAD when end-of-speech is detected (~100-200ms latency).
    * This fires MUCH faster than the answerSilenceMs fallback timer.
@@ -285,29 +319,40 @@ export class ComedianBrain {
     this._onAnswerComplete();
   }
 
+  /**
+   * Accumulate text into the answer buffer.
+   * When `finished` is true, the text is the authoritative final transcription
+   * for the current speech segment — replace the buffer wholesale to fix
+   * smartJoin artifacts (e.g. "4 2" → "42").
+   */
+  private _accumulateAnswer(text: string, finished: boolean): void {
+    if (finished && text.trim()) {
+      this.answerBuffer = text;
+    } else {
+      this.answerBuffer = smartJoin(this.answerBuffer, text);
+    }
+    this.deps.setUserAnswer(this.answerBuffer);
+  }
+
   /** Called when Gemini transcribes user speech */
-  onInputTranscription(text: string): void {
+  onInputTranscription(text: string, finished: boolean = false): void {
     if (!text.trim()) return;
 
     // In prodding state: user spoke → cancel prod, return to wait_answer
     if (this.state === "prodding") {
       this.deps.cancelSpeech();
       this._clearTimers();
-      this.answerBuffer = text;
-      this.deps.setUserAnswer(text);
+      this._accumulateAnswer(text, finished);
       this._transition("wait_answer");
-      // Answer already started — use silence timer, not prod timer
       this._startAnswerSilenceTimer();
       return;
     }
 
     // Late transcription during generation — STT tokens still arriving after silence timer fired.
-    // Use a very short silence window (half of answerSilenceMs) since speech is clearly ending.
     if (this.state === "generating") {
       this._clearTimers();
       this.deps.cancelSpeech();
-      this.answerBuffer = smartJoin(this.answerBuffer, text);
-      this.deps.setUserAnswer(this.answerBuffer);
+      this._accumulateAnswer(text, finished);
       this.deps.logTiming(`brain: late transcription during generating — "${text}" → buffer now "${this.answerBuffer}"`);
       if (!COMEDIAN_CONFIG.skipPreGeneration) {
         this._transition("pre_generate");
@@ -315,7 +360,6 @@ export class ComedianBrain {
       } else {
         this._transition("wait_answer");
       }
-      // Short window — STT is actively streaming, speech is ending, no need for full answerSilenceMs
       this._startLateSilenceTimer();
       return;
     }
@@ -328,16 +372,14 @@ export class ComedianBrain {
 
     // User speaks during question TTS — buffer it so it's not lost when we enter wait_answer
     if (this.state === "ask_question") {
-      this.answerBuffer = smartJoin(this.answerBuffer, text);
-      this.deps.setUserAnswer(this.answerBuffer);
+      this._accumulateAnswer(text, finished);
       this.deps.logTiming(`brain: early answer during ask_question — "${text}"`);
       return;
     }
 
     if (this.state === "wait_answer" || this.state === "pre_generate") {
-      this._clearTimers(); // reset silence timer
-      this.answerBuffer = smartJoin(this.answerBuffer, text);
-      this.deps.setUserAnswer(this.answerBuffer);
+      this._clearTimers();
+      this._accumulateAnswer(text, finished);
       this.deps.logTiming(`brain: heard "${text}" → buffer now "${this.answerBuffer}" (${wordCount(this.answerBuffer)}w)`);
 
       // Start speculative generation once we have enough words
@@ -356,10 +398,10 @@ export class ComedianBrain {
 
   /** Called when vision analysis completes (even with empty observations) */
   onVisionUpdate(observations: string[]): void {
-    // During greeting, flag that vision is ready regardless of content
+    // During greeting, flag that vision is ready and fire generation
     if (this.state === "greeting") {
       this.visionReadyForGreeting = true;
-      this._maybeAdvanceFromGreeting();
+      this._maybeFireGreetingGeneration();
       return;
     }
 
@@ -425,6 +467,8 @@ export class ComedianBrain {
       case "delivering":
         this._onDeliveringDrained();
         break;
+      case "dev_note":
+        break; // no-op — waiting for thumbs-up gesture
       case "redirecting":
         // After a redirect, advance to the next question — re-asking loops if the user keeps
         // giving off-topic answers (the puppet already nudged them back; move on)
@@ -452,47 +496,53 @@ export class ComedianBrain {
     this.greetingTtsDrained = false;
     this.visionReadyForGreeting = false;
 
-    // Set 3s vision timeout
+    // Set vision timeout — if webcam frame doesn't arrive in time, generate without image
     this.greetingVisionTimeout = setTimeout(() => {
       this.visionReadyForGreeting = true;
-      this._maybeAdvanceFromGreeting();
+      this._maybeFireGreetingGeneration();
     }, COMEDIAN_CONFIG.greetingVisionTimeoutMs);
 
-    // Pick greeting from persona greetings (anti-repeat shuffle)
-    const persona = this.deps.getPersona();
-    const greetingKey = `comedian-greetings-${persona}`;
-    let usedIndices: number[] = [];
-    try {
-      usedIndices = JSON.parse(sessionStorage.getItem(greetingKey) ?? "[]") as number[];
-    } catch { /* ignore */ }
+    this.deps.setMotion("thinking", 0.6);
+    this.deps.logTiming("brain: greeting — waiting for vision before generating");
+    this._maybeFireGreetingGeneration();
+  }
 
-    const greetings = this._getPersonaGreetings();
-    const available = greetings
-      .map((_, i) => i)
-      .filter((i) => !usedIndices.includes(i));
-    const pool = available.length > 0 ? available : greetings.map((_, i) => i);
-    const idx = pool[Math.floor(Math.random() * pool.length)];
-    const greetingText = greetings[idx];
+  /** Once vision is ready (or timed out), generate the greeting via LLM. */
+  private _maybeFireGreetingGeneration(): void {
+    if (!this.visionReadyForGreeting) return;
+    if (this.visionJokePrefetch) return;
 
-    const newUsed = available.length > 0 ? [...usedIndices, idx] : [idx];
-    try {
-      sessionStorage.setItem(greetingKey, JSON.stringify(newUsed));
-    } catch { /* ignore */ }
+    if (this.greetingVisionTimeout) {
+      clearTimeout(this.greetingVisionTimeout);
+      this.greetingVisionTimeout = null;
+    }
 
-    this.deps.setMotion("energetic", 0.8);
-    this.deps.queueSpeak(greetingText, "energetic", 0.8);
-    this._addLedger("joke", greetingText, []);
-
-    // Prefetch vision opening jokes while greeting is playing to cut post-greeting latency
     const observations = this.deps.getObservations();
     const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
+
     this.visionJokePrefetch = this._generateJoke({
-      context: "vision_opening",
+      context: "greeting",
       observations,
       imageBase64: frame,
     });
 
-    this.deps.logTiming("brain: greeting queued, vision joke prefetch started");
+    this.visionJokePrefetch.then((response) => {
+      if (this.state !== "greeting") return;
+      if (!response || response.jokes.length === 0) {
+        this.deps.queueSpeak("Oh, wow. Okay. Let me get a look at you.", "energetic", 0.8);
+        this._addLedger("joke", "Oh, wow. Okay. Let me get a look at you.", []);
+      } else {
+        for (const joke of response.jokes) {
+          this.deps.queueSpeak(joke.text, joke.motion, joke.intensity);
+          this._addLedger("joke", joke.text, response.tags ?? []);
+          this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
+          this.lastJokeIntensity = joke.intensity;
+        }
+      }
+      this.deps.setMotion("energetic", 0.8);
+    });
+
+    this.deps.logTiming("brain: greeting generation fired" + (frame ? " (with image)" : " (no image)"));
   }
 
   private _maybeAdvanceFromGreeting(): void {
@@ -501,12 +551,8 @@ export class ComedianBrain {
         clearTimeout(this.greetingVisionTimeout);
         this.greetingVisionTimeout = null;
       }
-      if (this.cameraAvailable) {
-        this.enterVisionJokes();
-      } else {
-        this._transition("ask_question");
-        this.enterAskQuestion();
-      }
+      this.visionJokePrefetch = null;
+      this.enterAskQuestion();
     }
   }
 
@@ -1364,13 +1410,20 @@ export class ComedianBrain {
     if (this.ledger.length > 30) this.ledger = this.ledger.slice(-30);
   }
 
+  /** IDs of questions to skip when ambient context provides location. */
+  private static readonly LOCATION_QUESTION_IDS = new Set(["hometown", "city"]);
+
   /** Returns the next valid question, skipping excluded ones. Null if exhausted. */
   private _nextValidQuestion(): ComedyQuestion | null {
     const total = this.shuffledQuestions.length;
+    const hasLocation = !!this.deps.getAmbientContext()?.city;
+
     for (let i = 0; i < total; i++) {
       const q = this.shuffledQuestions[(this.questionIndex + i) % total];
       // Skip if already asked
       if (this.askedQuestionIds.has(q.id)) continue;
+      // Skip location questions when we already know their city
+      if (hasLocation && ComedianBrain.LOCATION_QUESTION_IDS.has(q.id)) continue;
       // Skip if excluded by a previously asked question
       const excluded = this.shuffledQuestions
         .filter((prev) => this.askedQuestionIds.has(prev.id) && prev.excludes)
@@ -1397,6 +1450,12 @@ export class ComedianBrain {
         facts.push(...entry.tags);
       }
     }
+    // Add ambient context city as a known fact if available
+    const ambient = this.deps.getAmbientContext();
+    if (ambient?.city && ambient.city !== "unknown") {
+      facts.push(`city:${ambient.city}`);
+      if (ambient.region) facts.push(`region:${ambient.region}`);
+    }
     return [...new Set(facts)]; // dedupe
   }
 
@@ -1413,6 +1472,7 @@ export class ComedianBrain {
   private _clearTimers(): void {
     if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
     if (this.prodTimer) { clearTimeout(this.prodTimer); this.prodTimer = null; }
+    if (this.devNoteTimer) { clearTimeout(this.devNoteTimer); this.devNoteTimer = null; }
   }
 
   private _getPersonaGreetings(): string[] {
@@ -1542,6 +1602,7 @@ export class ComedianBrain {
           burnIntensity: this.deps.getBurnIntensity(),
           contentMode: this.deps.getContentMode(),
           setting: this.deps.getVisionSetting(),
+          ambientContext: this.deps.getAmbientContext() ?? undefined,
         }),
         signal,
       });

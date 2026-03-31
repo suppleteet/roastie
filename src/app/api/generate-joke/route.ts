@@ -47,6 +47,16 @@ export interface GenerateJokeRequest {
   maxJokes?: number;
   imageBase64?: string;
   setting?: string | null;
+  /** Ambient context from geolocation — city, time-of-day, weather */
+  ambientContext?: {
+    city: string;
+    region: string;
+    timeOfDay: string;
+    localTime: string;
+    weather?: string;
+    tempF?: number;
+    tempC?: number;
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -96,6 +106,15 @@ export async function POST(req: NextRequest) {
       contextLines.push(`CONVERSATION SO FAR:\n${body.conversationSoFar.slice(-6).join("\n")}`);
     if (body.knownFacts?.length)
       contextLines.push(`KNOWN FACTS ABOUT THIS PERSON (sprinkle throwback references to earlier topics when it fits naturally): ${body.knownFacts.join(", ")}`);
+    if (body.ambientContext) {
+      const ac = body.ambientContext;
+      const parts = [`AMBIENT CONTEXT (from their location — use AT MOST ONCE per session, only when funny):`];
+      parts.push(`- City: ${ac.city}${ac.region ? `, ${ac.region}` : ""}`);
+      parts.push(`- Time: ${ac.timeOfDay} (${ac.localTime})`);
+      if (ac.weather) parts.push(`- Weather: ${ac.weather}${ac.tempF !== undefined ? ` (${ac.tempF}°F)` : ""}`);
+      parts.push(`RULES: Reference time/weather ABSTRACTLY — "you're up this late", "it's pouring outside and you're doing THIS" — never say the exact time or temperature. Use the city for local-specific jokes. Don't force it — only use if it's genuinely funny.`);
+      contextLines.push(parts.join("\n"));
+    }
     if (body.maxJokes)
       contextLines.push(`IMPORTANT: Generate exactly ${body.maxJokes} joke(s). No more.`);
 

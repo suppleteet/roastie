@@ -43,6 +43,7 @@ export default function LiveSessionController({
   // All other store access uses getState() to avoid stale closures.
   const phase = useSessionStore((s) => s.phase);
   const pendingDebugTranscription = useSessionStore((s) => s.pendingDebugTranscription);
+  const pendingDevNoteResume = useSessionStore((s) => s.pendingDevNoteResume);
 
   const sessionRef = useRef<Session | null>(null);
   const isRunningRef = useRef(false);
@@ -122,6 +123,13 @@ export default function LiveSessionController({
     useSessionStore.getState().logTiming(`debug-input: "${text}"`);
     brainRef.current.onInputTranscription(text);
   }, [pendingDebugTranscription]);
+
+  // Dev voice notes: consume resume signal and forward to brain
+  useEffect(() => {
+    if (!pendingDevNoteResume || !brainRef.current) return;
+    useSessionStore.getState().clearPendingDevNoteResume();
+    brainRef.current.resumeFromDevNote();
+  }, [pendingDevNoteResume]);
 
   // ─── Brain helpers ────────────────────────────────────────────────────────────
 
@@ -211,7 +219,7 @@ export default function LiveSessionController({
     useSessionStore.getState().endSpan(ttsSpanId);
   }
 
-  /** Record time-to-first-speech and start recording on first audio. */
+  /** Record time-to-first-speech metric (recording already started at kickoff). */
   function recordTtfs(): void {
     if (!firstSpeechRecordedRef.current && kickoffTimeRef.current !== null) {
       firstSpeechRecordedRef.current = true;
@@ -219,9 +227,6 @@ export default function LiveSessionController({
       useSessionStore.getState().setTimeToFirstSpeechMs(ttfs);
       useSessionStore.getState().logTiming(`brain: TTFS ${ttfs}ms`);
       useSessionStore.getState().setHasSpokenThisSession(true);
-      if (!mockMode && videoRecorderRef.current && compositorStream && isRunningRef.current) {
-        videoRecorderRef.current.start(compositorStream, getRecordingAudioStream());
-      }
     }
   }
 
@@ -391,7 +396,7 @@ export default function LiveSessionController({
       const [motion, intensity] = inferMotionFromTranscript(text, store.audioAmplitude);
       store.setActiveMotionState(motion, intensity);
 
-      // Route to brain
+      // Route to brain (pass finished flag so brain can use authoritative final text)
       brainRef.current?.onInputTranscription(text);
 
       // Start user speaking span
@@ -448,6 +453,25 @@ export default function LiveSessionController({
     }
   }
 
+  // ─── Thumb gesture detection (dev voice notes) ───────────────────────────────
+
+  const THUMBS_DOWN_KW = ["thumbs down", "thumb down"];
+  const THUMBS_UP_KW = ["thumbs up", "thumb up"];
+
+  function detectThumbGesture(observations: string[]) {
+    if (!COMEDIAN_CONFIG.devNotesEnabled) return;
+    const lower = observations.map((o) => o.toLowerCase());
+    const down = lower.some((obs) => THUMBS_DOWN_KW.some((kw) => obs.includes(kw)));
+    const up = lower.some((obs) => THUMBS_UP_KW.some((kw) => obs.includes(kw)));
+    const currentBrainState = useSessionStore.getState().brainState;
+
+    if (down && currentBrainState !== "dev_note") {
+      brainRef.current?.enterDevNote();
+    } else if (up && currentBrainState === "dev_note") {
+      useSessionStore.getState().requestDevNoteResume();
+    }
+  }
+
   // ─── Webcam + Vision ──────────────────────────────────────────────────────────
 
   function startWebcamSend() {
@@ -497,6 +521,7 @@ export default function LiveSessionController({
           useSessionStore.getState().setObservations(obs);
           brainRef.current?.onVisionUpdate(obs);
           detectLaughter(obs);
+          detectThumbGesture(obs);
         } else {
           clearLaughter();
         }
@@ -657,6 +682,11 @@ export default function LiveSessionController({
   async function startLiveSession() {
     if (isRunningRef.current) return; // guard against React StrictMode double-invoke
     isRunningRef.current = true;
+
+    // Warm up AudioContext immediately — on iOS Safari, creating the context close
+    // to the user gesture ensures hardware volume buttons control Web Audio output.
+    playback.warmUp();
+
     ttsChainRef.current = Promise.resolve();
     ttsGenerationRef.current++; // increment (not reset) — invalidates any in-flight TTS from prior session
     lastSpokenTextRef.current = ""; // reset vocal continuity context for new session
@@ -682,6 +712,7 @@ export default function LiveSessionController({
       getContentMode: () => useSessionStore.getState().contentMode,
       getObservations: () => useSessionStore.getState().observations,
       getVisionSetting: () => useSessionStore.getState().visionSetting,
+      getAmbientContext: () => useSessionStore.getState().ambientContext,
       setBrainState: (s) => useSessionStore.getState().setBrainState(s),
       setCurrentQuestion: (q) => useSessionStore.getState().setCurrentQuestion(q),
       setUserAnswer: (a) => useSessionStore.getState().setUserAnswer(a),
@@ -725,6 +756,12 @@ export default function LiveSessionController({
       // Check camera availability
       const frame = webcamRef.current?.captureFrame();
       if (!frame) brainRef.current.setCameraAvailable(false);
+
+      // Start recording immediately (at fade-in, before first speech)
+      if (!mockMode && videoRecorderRef.current && compositorStream && isRunningRef.current) {
+        videoRecorderRef.current.start(compositorStream, getRecordingAudioStream());
+        useSessionStore.getState().logTiming("live: recording started at kickoff");
+      }
 
       // Start the comedy show
       startDrainPolling();

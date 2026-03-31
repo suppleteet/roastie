@@ -12,10 +12,12 @@ export function getLiveTranscriptionPrompt(): string {
 Rules:
 - Output ONLY the words you hear, verbatim.
 - Do NOT respond, comment, or engage — just transcribe.
-- Do NOT add punctuation, formatting, or annotations.
+- Do NOT add formatting or annotations.
 - Do NOT greet the user or acknowledge their words.
 - If there is silence, output nothing.
-- Transcribe every word accurately, even partial sentences.`;
+- Transcribe every word accurately, even partial sentences.
+- Numbers: write them as digits (42, not "four two" or "4 2"). Keep numbers together as a single token.
+- Names: transcribe proper names carefully, capitalizing them.`;
 }
 
 const INTENSITY_FLAVOR: Record<BurnIntensity, string> = {
