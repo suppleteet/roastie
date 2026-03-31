@@ -84,3 +84,15 @@ OVERALL: SHIP IT ✓  |  NEEDS WORK ✗
 
 **SHIP IT** = review approved + no critical maintenance drift + all tests pass.
 **NEEDS WORK** = any critical review finding, any violated invariant, or any test failure.
+
+## Step 6 — Commit & Push
+
+After the report, if there are any uncommitted changes (from knowledge base sync or bug fixes during review):
+
+1. Stage only the files changed during this wrapup session
+2. Commit with a descriptive message
+3. `git push`
+
+If there are no uncommitted changes, skip this step.
+
+Always push at the end — the wrapup is the finish line.
