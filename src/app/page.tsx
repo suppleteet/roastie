@@ -406,6 +406,11 @@ function MainApp() {
           )}
         </div>
       )}
+      {process.env.NODE_ENV === "production" && process.env.NEXT_PUBLIC_BUILD_TIME && (
+        <div className="fixed bottom-2 right-3 text-white/20 text-[10px] select-none pointer-events-none z-50">
+          {new Date(process.env.NEXT_PUBLIC_BUILD_TIME).toLocaleString()}
+        </div>
+      )}
     </main>
   );
 }
