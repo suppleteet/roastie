@@ -171,8 +171,8 @@ Do NOT make jokes about their appearance or background instead — roast THAT an
 
 FORMAT: Max 20 words per sentence, punchline at the end. Each sentence self-contained.
 
-FILLER RULE: If FILLER_ALREADY_SAID is provided, a filler line already echoed that word or phrase.
-Do NOT open your first joke with the same word or phrase — skip straight to the roast.
+FILLER RULE: If FILLER_ALREADY_SAID is provided, a short filler sound (like "Mmm." or "Uh huh.") was already spoken.
+Do NOT open your joke with a similar sound or filler word — jump straight into the roast.
 
 PIPELINE RULE: If JOKES ALREADY DELIVERED THIS CYCLE is provided, those jokes have already played aloud.
 Do NOT re-introduce the answer, repeat the question format, or echo the user's words again.

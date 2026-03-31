@@ -749,9 +749,10 @@ export class ComedianBrain {
     this.enterGenerating(answer);
   }
 
-  // Short filler reactions — play immediately when generating starts so there's no dead air
+  // Short non-word filler reactions — play immediately when generating starts so there's no dead air.
+  // These are speculative/thinking sounds that bridge naturally into the joke via ElevenLabs vocal continuity.
   private static readonly GENERATING_FILLERS = [
-    "Hmm.", "Ha.", "Oh.", "Huh.", "Mmm.", "Right.", "I see.", "Oh?", "Noted.", "Okay.",
+    "Mmm.", "Hm.", "Uh huh.", "Hmm.", "Mmhmm.", "Ohhh.", "Huh.",
   ];
 
   private enterGenerating(answer: string): void {
@@ -760,20 +761,15 @@ export class ComedianBrain {
     this.deps.setMotion("thinking", 0.7);
     this._addLedger("answer", answer, []);
 
-    // Queue an immediate filler so the user hears something right away while the API generates.
-    // Short answers: echo the answer back ("Tyler." / "San Francisco.") — instant and funny.
-    // Longer answers: use a generic short reaction.
+    // Queue an immediate non-word filler so the user hears something right away while the API generates.
+    // These short sounds ("Mmm.", "Uh huh.") bridge the silence and set the vocal tone for the joke
+    // via ElevenLabs previous_text continuity — no extra latency.
     let fillerAlreadySaid: string | undefined;
     if (!COMEDIAN_CONFIG.skipFiller) {
-      const answerWords = answer.trim().split(/\s+/);
-      const isEchoFiller = answerWords.length <= 3;
-      const filler = isEchoFiller
-        ? `${answer}.`
-        : ComedianBrain.GENERATING_FILLERS[Math.floor(Math.random() * ComedianBrain.GENERATING_FILLERS.length)];
+      const filler = ComedianBrain.GENERATING_FILLERS[Math.floor(Math.random() * ComedianBrain.GENERATING_FILLERS.length)];
       this.deps.queueSpeak(filler, "thinking", 0.6);
       this.deps.logTiming(`brain: filler — "${filler}"`);
-      // Only pass filler to generator when it echoed the answer — so the joke doesn't repeat it
-      fillerAlreadySaid = isEchoFiller ? filler : undefined;
+      fillerAlreadySaid = filler;
     }
 
     const q = this.currentQuestion;
@@ -1273,10 +1269,8 @@ export class ComedianBrain {
     const q = this.currentQuestion;
     const conversationSoFar = this._getLedgerContext();
 
-    // If the answer is short enough to get an echo filler, tell the generator now
-    // so the joke doesn't open by repeating the same word/phrase
-    const snapshotWords = snapshot.split(/\s+/).filter(Boolean).length;
-    const fillerAlreadySaid = snapshotWords <= 3 ? `${snapshot}.` : undefined;
+    // Filler will be a non-word sound — tell the generator so the joke doesn't open similarly
+    const fillerAlreadySaid = COMEDIAN_CONFIG.skipFiller ? undefined : "filler sound";
 
     const result = this._generateJoke(
       {
