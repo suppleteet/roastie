@@ -41,6 +41,11 @@ export function usePcmPlayback(): PcmPlaybackHandle {
   const rafRef = useRef<number>(0);
   const lastAmplitudeRef = useRef<number>(0);
 
+  // Hidden <audio> element routes output through the media channel on Android.
+  // Without this, Chrome Android sends Web Audio through the earpiece when
+  // getUserMedia is active, ignoring the media volume slider.
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+
   function getOrCreateContext(): AudioContext {
     let ctx = ctxRef.current;
     if (!ctx || ctx.state === "closed") {
@@ -55,8 +60,24 @@ export function usePcmPlayback(): PcmPlaybackHandle {
       const dest = ctx.createMediaStreamDestination();
       destRef.current = dest;
 
-      analyser.connect(ctx.destination);
+      // Route through a MediaStream → <audio> element so Android Chrome uses
+      // the media volume channel instead of the earpiece/communication channel.
+      // Without this, Chrome Android sends Web Audio through the call/earpiece
+      // channel when getUserMedia is active, and the media volume slider has no effect.
+      const speakerDest = ctx.createMediaStreamDestination();
+      analyser.connect(speakerDest);
       analyser.connect(dest);
+
+      const audioEl = document.createElement("audio");
+      audioEl.srcObject = speakerDest.stream;
+      // Force speaker output (not earpiece) on devices that support setSinkId
+      if ("setSinkId" in audioEl) {
+        (audioEl as HTMLAudioElement & { setSinkId(id: string): Promise<void> })
+          .setSinkId("")
+          .catch(() => {});
+      }
+      audioEl.play().catch(() => {});
+      audioElRef.current = audioEl;
     }
     return ctx;
   }
@@ -136,6 +157,11 @@ export function usePcmPlayback(): PcmPlaybackHandle {
     return () => {
       cancelAnimationFrame(rafRef.current);
       flush();
+      if (audioElRef.current) {
+        audioElRef.current.pause();
+        audioElRef.current.srcObject = null;
+        audioElRef.current = null;
+      }
       if (ctxRef.current?.state !== "closed") {
         ctxRef.current?.close();
       }
@@ -162,8 +188,10 @@ export function usePcmPlayback(): PcmPlaybackHandle {
     const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    src.connect(ctx.destination);
+    src.connect(analyserRef.current ?? ctx.destination);
     src.start();
+    // Also ensure the <audio> element is playing (Android requires user gesture)
+    audioElRef.current?.play().catch(() => {});
   }, []);
 
   return {
