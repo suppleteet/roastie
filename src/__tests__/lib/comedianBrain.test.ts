@@ -73,7 +73,7 @@ afterEach(() => {
 /** Helper: get all values passed to setBrainState */
 function stateHistory(deps: ComedianBrainDeps): (string | null)[] {
   return (deps.setBrainState as ReturnType<typeof vi.fn>).mock.calls.map(
-    (c: [string | null]) => c[0],
+    (c: unknown[]) => c[0] as string | null,
   );
 }
 

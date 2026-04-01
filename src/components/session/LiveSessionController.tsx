@@ -755,6 +755,18 @@ export default function LiveSessionController({
       setUserAnswer: (a) => useSessionStore.getState().setUserAnswer(a),
       logTiming: (e) => useSessionStore.getState().logTiming(e),
       revealSession: () => useSessionStore.getState().setHasSpokenThisSession(true),
+      saveCritique: (text, ctx) => {
+        fetch("/api/save-feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "critique",
+            text,
+            persona: ctx.persona,
+            lastJokeText: ctx.lastJokeText,
+          }),
+        }).catch(() => {});
+      },
     });
 
     const connectSpanId = useSessionStore.getState().beginSpan("session", "connect");

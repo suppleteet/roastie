@@ -36,7 +36,9 @@ export default function FeedbackBox({ videoFilename, onSent }: Props) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          type: "post-session",
           text: trimmed,
+          persona: store.activePersona,
           videoFilename: videoFilename ?? null,
           sessionLog,
         }),

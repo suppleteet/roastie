@@ -17,6 +17,9 @@ export async function POST(req: NextRequest) {
 
     const body = (await req.json()) as {
       text?: string;
+      type?: "post-session" | "critique";
+      persona?: string;
+      lastJokeText?: string;
       videoFilename?: string | null;
       sessionLog?: unknown;
     };
@@ -26,17 +29,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No feedback text" }, { status: 400 });
     }
 
+    const feedbackType = body.type ?? "post-session";
+
     await mkdir(FEEDBACK_DIR, { recursive: true });
 
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `feedback-${ts}.json`;
+    const prefix = feedbackType === "critique" ? "critique" : "feedback";
+    const filename = `${prefix}-${ts}.json`;
 
-    const entry = {
+    const entry: Record<string, unknown> = {
+      type: feedbackType,
       text,
-      videoFilename: body.videoFilename ?? null,
-      sessionLog: body.sessionLog ?? null,
+      persona: body.persona ?? null,
       createdAt: new Date().toISOString(),
     };
+
+    if (feedbackType === "critique" && body.lastJokeText) {
+      entry.lastJokeText = body.lastJokeText;
+    }
+    if (body.videoFilename) {
+      entry.videoFilename = body.videoFilename;
+    }
+    if (body.sessionLog) {
+      entry.sessionLog = body.sessionLog;
+    }
 
     await writeFile(
       path.join(FEEDBACK_DIR, filename),
@@ -44,9 +60,9 @@ export async function POST(req: NextRequest) {
       "utf-8",
     );
 
-    // Prune old feedback
+    // Prune old feedback (both types)
     const files = (await readdir(FEEDBACK_DIR))
-      .filter((f) => f.startsWith("feedback-") && f.endsWith(".json"))
+      .filter((f) => (f.startsWith("feedback-") || f.startsWith("critique-")) && f.endsWith(".json"))
       .sort();
     if (files.length > MAX_FEEDBACK) {
       for (const old of files.slice(0, files.length - MAX_FEEDBACK)) {
@@ -54,7 +70,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    console.log(`[save-feedback] "${text.slice(0, 80)}" → ${filename}`);
+    console.log(`[save-feedback] [${feedbackType}] "${text.slice(0, 80)}" → ${filename}`);
     return NextResponse.json({ ok: true, filename });
   } catch (err) {
     console.error("[save-feedback]", err);

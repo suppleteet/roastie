@@ -1,5 +1,6 @@
 import { getPersona, type PersonaId, DEFAULT_PERSONA } from "@/lib/personas";
 import { getAvoidTopicsBlock } from "@/lib/avoidTopics";
+import { getComedyGuidelinesBlock } from "@/lib/comedyGuidelines";
 import type { JokeContext } from "@/app/api/generate-joke/route";
 
 export type BurnIntensity = 1 | 2 | 3 | 4 | 5;
@@ -61,7 +62,7 @@ Deliver a greeting (1-2 sentences) in your character voice, then make one sharp,
 ${p.antiPatterns.map((a) => `- ${a}`).join("\n")}
 
 ## What You NEVER Joke About
-${getAvoidTopicsBlock(p.avoidTopics)}
+${getAvoidTopicsBlock(p.avoidTopics)}${(() => { const g = getComedyGuidelinesBlock(personaId); return g ? `\n\n## Audience Feedback Guidelines\nThese patterns have been identified from real audience reactions. Adjust your comedy accordingly:\n${g}` : ""; })()}
 
 Return ONLY a valid JSON object in exactly this shape:
 {
@@ -107,7 +108,7 @@ ${p.antiPatterns.map((a) => `- ${a}`).join("\n")}
 - Never output anything but valid JSON.
 
 ## What You NEVER Joke About
-${getAvoidTopicsBlock(p.avoidTopics, contentMode)}`;
+${getAvoidTopicsBlock(p.avoidTopics, contentMode)}${(() => { const g = getComedyGuidelinesBlock(personaId); return g ? `\n\n## Audience Feedback Guidelines\nThese patterns have been identified from real audience reactions. Adjust your comedy accordingly:\n${g}` : ""; })()}`;
 
   const responseSchema = `
 Return ONLY valid JSON (no markdown, no explanation) in this exact shape:
@@ -280,7 +281,7 @@ ${p.sentenceGuidance}
 ${p.antiPatterns.map((a) => `- ${a}`).join("\n")}
 
 ## What You NEVER Joke About
-${getAvoidTopicsBlock(p.avoidTopics)}
+${getAvoidTopicsBlock(p.avoidTopics)}${(() => { const g = getComedyGuidelinesBlock(personaId); return g ? `\n\n## Audience Feedback Guidelines\nThese patterns have been identified from real audience reactions. Adjust your comedy accordingly:\n${g}` : ""; })()}
 
 ## Format Rules (CRITICAL — ALL PERSONAS)
 - Rapid-fire, one-liner-dense. No long stories or extended setups.

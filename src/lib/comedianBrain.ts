@@ -56,6 +56,8 @@ export interface ComedianBrainDeps {
   logTiming: (entry: string) => void;
   /** Called when session should reveal the puppet (fade in). */
   revealSession?: () => void;
+  /** Fire-and-forget: save an in-session critique to feedback storage. */
+  saveCritique?: (text: string, context: { persona: PersonaId; lastJokeText?: string }) => void;
   /** Optional: pre-seed for testing */
   initialHopper?: ScoredJoke[];
   initialLedger?: LedgerEntry[];
@@ -151,6 +153,7 @@ export class ComedianBrain {
   private consecutiveSilentQuestions = 0;
   private visionOnlyMode = false;
   private started = false;
+  private lastDeliveredJokeText = "";
 
   // Vision state
   private previousObservations: string[] = [];
@@ -1397,16 +1400,24 @@ export class ComedianBrain {
 
   // ─── Passive reaction handling ────────────────────────────────────────────────
 
+  private static CRITIQUE_RE = /not\s+funny|wasn'?t\s+funny|isn'?t\s+funny|too\s+(mean|harsh|far|rude)|stop\s+(that|it)|offensive|inappropriate|don'?t\s+(joke|talk)\s+about|that\s+(hurt|sucked|was\s+bad)/i;
+
   private _handleReactionText(text: string): void {
     const lower = text.toLowerCase();
     const isLaughter = /ha|hehe|lol|haha/.test(lower);
+    const isCritique = ComedianBrain.CRITIQUE_RE.test(lower);
 
     if (isLaughter) {
       this._addLedger("reaction", text, ["reaction:laughter"]);
-      // Fire a topper from the hopper
       this._fireHopperGeneration("riff_on_reaction");
+    } else if (isCritique) {
+      this._addLedger("reaction", text, ["reaction:critique"]);
+      this.deps.logTiming(`brain: critique detected — "${text}"`);
+      this.deps.saveCritique?.(text, {
+        persona: this.deps.getPersona(),
+        lastJokeText: this.lastDeliveredJokeText || undefined,
+      });
     } else if (text.trim().split(/\s+/).length <= 5) {
-      // Short verbal reaction
       this._addLedger("reaction", text, ["reaction:verbal"]);
     }
   }
@@ -1418,6 +1429,7 @@ export class ComedianBrain {
     text: string,
     tags: string[],
   ): void {
+    if (type === "joke") this.lastDeliveredJokeText = text;
     this.ledger.push({ type, text, timestamp: Date.now(), tags });
     // Keep last 30 entries
     if (this.ledger.length > 30) this.ledger = this.ledger.slice(-30);
