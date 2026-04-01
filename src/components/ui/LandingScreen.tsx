@@ -11,7 +11,7 @@ export default function LandingScreen() {
 
   function handleStart() {
     setError(null);
-    setPhase("requesting-permissions", "START_CLICKED");
+    setPhase("consent", "START_CLICKED");
   }
 
   return (
