@@ -228,13 +228,6 @@ export class ComedianBrain {
       return;
     }
 
-    // If vision observations are already available (pre-scanned), mark vision ready immediately
-    const existingObs = this.deps.getObservations();
-    if (existingObs.length > 0 && this.cameraAvailable) {
-      this.deps.logTiming("brain: observations pre-loaded — greeting will use them immediately");
-      this.visionReadyForGreeting = true;
-    }
-
     this.enterGreeting();
   }
 
@@ -398,12 +391,8 @@ export class ComedianBrain {
 
   /** Called when vision analysis completes (even with empty observations) */
   onVisionUpdate(observations: string[]): void {
-    // During greeting, flag that vision is ready and fire generation
-    if (this.state === "greeting") {
-      this.visionReadyForGreeting = true;
-      this._maybeFireGreetingGeneration();
-      return;
-    }
+    // Greeting fires generation immediately — no need to wait for vision
+    if (this.state === "greeting") return;
 
     if (observations.length === 0) return;
 
@@ -494,31 +483,14 @@ export class ComedianBrain {
     this._transition("greeting");
     this.micMode = "off";
     this.greetingTtsDrained = false;
-    this.visionReadyForGreeting = false;
+    this.visionReadyForGreeting = true; // don't wait — fire immediately
 
-    // Set vision timeout — if webcam frame doesn't arrive in time, generate without image
-    this.greetingVisionTimeout = setTimeout(() => {
-      this.visionReadyForGreeting = true;
-      this._maybeFireGreetingGeneration();
-    }, COMEDIAN_CONFIG.greetingVisionTimeoutMs);
-
-    this.deps.setMotion("thinking", 0.6);
-    this.deps.logTiming("brain: greeting — waiting for vision before generating");
-    this._maybeFireGreetingGeneration();
-  }
-
-  /** Once vision is ready (or timed out), generate the greeting via LLM. */
-  private _maybeFireGreetingGeneration(): void {
-    if (!this.visionReadyForGreeting) return;
-    if (this.visionJokePrefetch) return;
-
-    if (this.greetingVisionTimeout) {
-      clearTimeout(this.greetingVisionTimeout);
-      this.greetingVisionTimeout = null;
-    }
-
+    // Fire greeting generation immediately with webcam frame — don't wait for /api/analyze.
+    // Gemini Flash gets the raw image and can see everything it needs.
     const observations = this.deps.getObservations();
     const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
+
+    this.deps.setMotion("thinking", 0.6);
 
     this.visionJokePrefetch = this._generateJoke({
       context: "greeting",
@@ -546,11 +518,7 @@ export class ComedianBrain {
   }
 
   private _maybeAdvanceFromGreeting(): void {
-    if (this.greetingTtsDrained && this.visionReadyForGreeting) {
-      if (this.greetingVisionTimeout) {
-        clearTimeout(this.greetingVisionTimeout);
-        this.greetingVisionTimeout = null;
-      }
+    if (this.greetingTtsDrained) {
       this.visionJokePrefetch = null;
       this.enterAskQuestion();
     }

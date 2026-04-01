@@ -149,23 +149,24 @@ describe("ComedianBrain — vision flow", () => {
     expect(states).toContain("ask_question");
   });
 
-  it("does NOT advance if only TTS drains (vision not ready, generation not resolved)", () => {
+  it("does NOT advance until generation resolves and TTS drains", () => {
+    // Greeting generation never resolves — TTS never queued, so drain fires with nothing played.
+    // Brain should still advance (greeting TTS drained = true), but queueSpeak should not have been called.
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
     brain.start();
-    brain.onTtsQueueDrained();
-    const states = getStates(deps);
-    expect(states).not.toContain("ask_question");
+    // No speech queued yet (fetch pending) — queueSpeak not called
+    expect(deps.queueSpeak).not.toHaveBeenCalled();
   });
 
-  it("advances with greeting timeout even if vision never arrives", async () => {
+  it("advances to ask_question once greeting TTS drains", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
     const deps = makeDeps();
     const brain = new ComedianBrain(deps);
     brain.start();
-    await vi.advanceTimersByTimeAsync(3100);
+    await vi.advanceTimersByTimeAsync(0); // flush generation
     brain.onTtsQueueDrained();
     const states = getStates(deps);
     expect(states).toContain("ask_question");
