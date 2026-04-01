@@ -155,6 +155,8 @@ export class ComedianBrain {
   // Vision state
   private previousObservations: string[] = [];
   private transitionCount = 0;
+  /** Queued vision interrupt — consumed at the next natural transition point. */
+  private pendingVisionInterrupt: { changes: string[]; current: string[]; previous: string[] } | null = null;
 
   // Speculative generation
   private speculativeRequest: {
@@ -414,6 +416,21 @@ export class ComedianBrain {
           this._addToHopper(joke.text, joke.motion, joke.intensity, joke.score ?? 9);
         }
       });
+    }
+
+    // Proactive vision interrupt: if something interesting changes during delivering/wait_answer/ask_question,
+    // flag it so the next transition inserts a vision react instead of the normal next step.
+    if (
+      this.previousObservations.length > 0 &&
+      (this.state === "delivering" || this.state === "wait_answer" || this.state === "ask_question")
+    ) {
+      const { isInteresting, changes } = diffObservations(this.previousObservations, observations);
+      if (isInteresting && changes.length > 0) {
+        this.pendingVisionInterrupt = { changes, current: observations, previous: [...this.previousObservations] };
+        this.previousObservations = [...observations];
+        this.deps.logTiming(`brain: vision interrupt queued (${changes.length} changes) — will fire at next transition`);
+        // Don't return — still feed hopper below
+      }
     }
 
     // Feed hopper with new vision context
@@ -1180,6 +1197,16 @@ export class ComedianBrain {
 
   private enterCheckVision(): void {
     this._transition("check_vision");
+
+    // Check for proactively queued vision interrupt first
+    if (this.pendingVisionInterrupt) {
+      const { changes, current, previous } = this.pendingVisionInterrupt;
+      this.pendingVisionInterrupt = null;
+      this.deps.logTiming("brain: consuming queued vision interrupt");
+      this.enterVisionReact(changes, current, previous);
+      return;
+    }
+
     const current = this.deps.getObservations();
 
     if (this.cameraAvailable && current.length > 0) {

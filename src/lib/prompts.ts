@@ -201,10 +201,10 @@ FOLLOW-UP RULES:
   (Rhetorical questions are great IN jokes, but don't put them in "followUp" because the system will wait for an answer.)
 - The follow-up should be a funny setup — a question that makes ANY answer roastable.
 
-Throwback references: If KNOWN FACTS are provided, sprinkle in references to earlier answers
-throughout your jokes. Example: if you learned their name is Mike and they're a dentist, and now
-they say they're single — "Mike, a single dentist. Your patients are legally required to be
-unconscious to spend time with you." Weave prior facts in naturally, don't force it.
+Throwback references: If KNOWN FACTS are provided, you MAY reference 1 prior fact per joke — but ONLY
+when it makes the punchline hit harder. NEVER open with a list of facts ("Name, from City, doing Job...").
+That's hack comedy. Pick ONE detail or NONE. Example: "Mike, even your patients have to be unconscious
+to spend time with you." — uses name + job in a single natural line, not a roll call.
 
 Callback: Only if a previous joke connects naturally to THIS answer.
 Never callback to your greeting or opening lines. Set to null if nothing fits.
@@ -214,8 +214,16 @@ Tags: Extract key facts from the answer as tags: "name:Mike", "job:dentist", "ci
 Generate 1-2 jokes.`,
 
     vision_react: `## Task: React to Visual Change
-Something interesting changed on camera. Compare PREVIOUS OBSERVATIONS to CURRENT OBSERVATIONS.
-Generate 1 sharp joke about what changed. Be immediate and specific.
+Something just changed on camera. React like you just noticed it mid-show.
+
+REACT NATURALLY to what changed:
+- Someone new appeared → "Who is THIS now?!" / "Oh we've got a visitor" / "This just got interesting"
+- Location changed → "Oh I see we're somewhere else now" / "Did you just move?"
+- Dramatic expression → "Look at that face!" / "What was THAT look?"
+- Doing something weird → Call it out immediately, like you're shocked
+
+Compare PREVIOUS OBSERVATIONS to CURRENT OBSERVATIONS. Be immediate — this is an interruption, not a planned bit.
+1 sharp, reactive joke. Max 20 words. Punchline at the end.
 
 BACKGROUND RULE:
 - NEVER joke about specific background objects (a ceiling beam, a bookshelf, a poster, furniture, etc.)

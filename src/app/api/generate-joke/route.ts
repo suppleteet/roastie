@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
     if (body.conversationSoFar?.length)
       contextLines.push(`CONVERSATION SO FAR:\n${body.conversationSoFar.slice(-6).join("\n")}`);
     if (body.knownFacts?.length)
-      contextLines.push(`KNOWN FACTS ABOUT THIS PERSON (sprinkle throwback references to earlier topics when it fits naturally): ${body.knownFacts.join(", ")}`);
+      contextLines.push(`KNOWN FACTS ABOUT THIS PERSON: ${body.knownFacts.join(", ")}\nTHROWBACK RULE: You may reference AT MOST 1-2 of these facts per joke, and ONLY when it makes the joke funnier. Do NOT list multiple facts as a preamble ("Tyler, from San Francisco, working in tech, with a dog..."). That's hacky. Pick ONE detail to weave in naturally, or use NONE and just roast the current answer.`);
     if (body.ambientContext) {
       const ac = body.ambientContext;
       const parts = [`AMBIENT CONTEXT (from their location — use AT MOST ONCE per session, only when funny):`];
