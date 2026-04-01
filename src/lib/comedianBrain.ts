@@ -185,9 +185,10 @@ export class ComedianBrain {
   private lastJokeMotion: import("@/lib/motionStates").MotionState = "emphasis";
   private lastJokeIntensity = 0.75;
 
-  // Greeting vision state
+  // Greeting state
   private visionReadyForGreeting = false;
   private greetingTtsDrained = false;
+  private greetingSpeechQueued = false; // true once greeting generation resolves and speech is queued
   private greetingVisionTimeout: ReturnType<typeof setTimeout> | null = null;
   private visionJokePrefetch: Promise<JokeResponse | null> | null = null;
 
@@ -502,7 +503,8 @@ export class ComedianBrain {
     this._transition("greeting");
     this.micMode = "off";
     this.greetingTtsDrained = false;
-    this.visionReadyForGreeting = true; // don't wait — fire immediately
+    this.greetingSpeechQueued = false;
+    this.visionReadyForGreeting = true;
 
     // Reveal the puppet early so you see the head rotate up from sleeping
     // before the greeting audio starts playing.
@@ -535,13 +537,17 @@ export class ComedianBrain {
         }
       }
       this.deps.setMotion("energetic", 0.8);
+      this.greetingSpeechQueued = true;
+      // If drain already fired while we were generating, advance now
+      this._maybeAdvanceFromGreeting();
     });
 
     this.deps.logTiming("brain: greeting generation fired" + (frame ? " (with image)" : " (no image)"));
   }
 
   private _maybeAdvanceFromGreeting(): void {
-    if (this.greetingTtsDrained) {
+    // Need both: generation resolved + TTS played through
+    if (this.greetingSpeechQueued && this.greetingTtsDrained) {
       this.visionJokePrefetch = null;
       this.enterAskQuestion();
     }
