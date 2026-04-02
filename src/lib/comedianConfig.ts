@@ -39,7 +39,7 @@ const defaults = {
   // Latency experiments (temporary)
   skipGreeting: false,         // skip greeting → jump straight to ask_question
   skipPreGeneration: true,    // skip speculative pre-generation during wait_answer
-  skipFiller: false,          // non-word filler ("Mmm.", "Uh huh.") bridges silence before joke
+  skipFiller: true,           // multi-turn chat is fast enough that fillers just trip up the delivery
   singleJokeMode: true,      // generate 1 joke at a time, pipeline next during delivery
 };
 

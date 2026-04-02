@@ -50,6 +50,8 @@ export interface ComedianBrainDeps {
   getObservations: () => string[];
   getVisionSetting: () => string | null;
   getAmbientContext: () => import("@/store/useSessionStore").AmbientContext | null;
+  /** Multi-turn chat session ID — if set, API routes reuse the session instead of sending the full persona. */
+  getSessionId: () => string | null;
   setBrainState: (state: BrainState | null) => void;
   setCurrentQuestion: (q: string | null) => void;
   setUserAnswer: (ans: string) => void;
@@ -831,7 +833,6 @@ export class ComedianBrain {
         conversationSoFar,
         knownFacts: this._getThrowbackContext(),
         maxJokes: COMEDIAN_CONFIG.singleJokeMode ? 1 : undefined,
-        imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
       },
       // onJoke — fires immediately as each joke streams in
       (joke) => {
@@ -929,7 +930,6 @@ export class ComedianBrain {
           userAnswer: answer,
           fillerAlreadySaid,
           conversationSoFar,
-          imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
         }).then((response) => {
           if (this.state !== "generating") return;
           this.enterDelivering(answer, response ?? { relevant: true, jokes: [] });
@@ -1073,7 +1073,6 @@ export class ComedianBrain {
         conversationSoFar,
         knownFacts: this._getThrowbackContext(),
         maxJokes: 1,
-        imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
       },
       (joke) => {
         if (this.deliveryGeneration !== gen) return;
@@ -1184,7 +1183,6 @@ export class ComedianBrain {
         conversationSoFar: this._getLedgerContext(),
         knownFacts: this._getThrowbackContext(),
         maxJokes: 1,
-        imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
       },
       abort.signal,
     ).then((response) => {
@@ -1302,7 +1300,6 @@ export class ComedianBrain {
         fillerAlreadySaid,
         conversationSoFar,
         knownFacts: this._getThrowbackContext(),
-        imageBase64: this.cameraAvailable ? this.deps.captureFrame() : undefined,
       },
       abort.signal,
     );
@@ -1541,6 +1538,7 @@ export class ComedianBrain {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...params,
+        sessionId: this.deps.getSessionId(),
         persona: this.deps.getPersona(),
         burnIntensity: this.deps.getBurnIntensity(),
         contentMode: this.deps.getContentMode(),
@@ -1624,6 +1622,7 @@ export class ComedianBrain {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...params,
+          sessionId: this.deps.getSessionId(),
           persona: this.deps.getPersona(),
           burnIntensity: this.deps.getBurnIntensity(),
           contentMode: this.deps.getContentMode(),

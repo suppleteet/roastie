@@ -57,6 +57,9 @@ export default function LiveSessionController({
   const kickoffTimeRef = useRef<number | null>(null);
   const firstSpeechRecordedRef = useRef(false);
 
+  // Gemini multi-turn chat session ID (comedian persona loaded once)
+  const comedianSessionIdRef = useRef<string | null>(null);
+
   // TTS pipeline — brain-driven, sequential ElevenLabs requests
   const ttsChainRef = useRef<Promise<void>>(Promise.resolve());
   const ttsGenerationRef = useRef(0);
@@ -751,6 +754,7 @@ export default function LiveSessionController({
       getObservations: () => useSessionStore.getState().observations,
       getVisionSetting: () => useSessionStore.getState().visionSetting,
       getAmbientContext: () => useSessionStore.getState().ambientContext,
+      getSessionId: () => comedianSessionIdRef.current,
       setBrainState: (s) => useSessionStore.getState().setBrainState(s),
       setCurrentQuestion: (q) => useSessionStore.getState().setCurrentQuestion(q),
       setUserAnswer: (a) => useSessionStore.getState().setUserAnswer(a),
@@ -777,6 +781,26 @@ export default function LiveSessionController({
         console.warn("[live] mic start failed:", e);
         brainRef.current?.setMicAvailable(false);
       });
+      // Create comedian chat session in parallel (non-blocking — falls back to stateless if it fails)
+      const store = useSessionStore.getState();
+      fetch("/api/comedian-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          persona: store.activePersona,
+          burnIntensity: store.burnIntensity,
+          contentMode: store.contentMode,
+        }),
+      })
+        .then((r) => r.json())
+        .then((data: { sessionId?: string }) => {
+          if (data.sessionId && isRunningRef.current) {
+            comedianSessionIdRef.current = data.sessionId;
+            useSessionStore.getState().logTiming(`live: comedian chat session ready (${data.sessionId})`);
+          }
+        })
+        .catch(() => { /* stateless fallback — no action needed */ });
+
       const session = await sessionPromise;
       await micPromise;
 
@@ -868,6 +892,16 @@ export default function LiveSessionController({
 
     try { sessionRef.current?.close(); } catch { /* may be closed */ }
     sessionRef.current = null;
+
+    // Clean up comedian chat session (fire-and-forget)
+    if (comedianSessionIdRef.current) {
+      fetch("/api/comedian-session", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: comedianSessionIdRef.current }),
+      }).catch(() => {});
+      comedianSessionIdRef.current = null;
+    }
 
     store.setIsSpeaking(false);
     store.setIsListening(false);

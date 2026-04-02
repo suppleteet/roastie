@@ -43,6 +43,7 @@ function makeDeps(overrides?: Partial<ComedianBrainDeps>): ComedianBrainDeps {
     getObservations: vi.fn(() => []),
     getVisionSetting: vi.fn(() => null),
     getAmbientContext: vi.fn(() => null),
+    getSessionId: vi.fn(() => null),
     setBrainState: vi.fn(),
     setCurrentQuestion: vi.fn(),
     setUserAnswer: vi.fn(),
