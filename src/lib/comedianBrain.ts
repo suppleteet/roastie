@@ -155,6 +155,7 @@ export class ComedianBrain {
   private prodCount = 0;
   private consecutiveSilentQuestions = 0;
   private visionOnlyMode = false;
+  private bankQuestionsInARow = 0; // after 1-2 bank questions, interleave a contextual/vision question
   private started = false;
   private lastDeliveredJokeText = "";
 
@@ -652,14 +653,22 @@ export class ComedianBrain {
       this.pendingFollowUp = null;
       this.followUpCount = 0;
 
-      // Find next question from bank, or generate one contextually
-      question = this._nextValidQuestion();
-      if (question) {
+      // Interleave bank questions with contextual/vision questions.
+      // After every bank question, generate a contextual one (what do you do in that office?).
+      // This keeps the show feeling reactive rather than like a questionnaire.
+      const bankAvailable = this._nextValidQuestion();
+      const shouldUseContextual = this.bankQuestionsInARow >= 1 && this.cameraAvailable;
+
+      if (bankAvailable && !shouldUseContextual) {
+        // Use bank question
+        question = bankAvailable;
         this.askedQuestionIds.add(question.id);
         this.currentQuestion = question;
+        this.bankQuestionsInARow++;
         this._queueQuestionWithBridge(this.currentQuestion.question);
       } else {
-        // Bank exhausted — generate a contextual question based on what we see + know
+        // Generate a contextual question based on what we see + know
+        this.bankQuestionsInARow = 0;
         this._generateContextualQuestion();
         return; // async — will set currentQuestion when it resolves
       }
@@ -1128,7 +1137,7 @@ export class ComedianBrain {
   /** Generate a contextual question via LLM based on what we see + know. */
   private _generateContextualQuestion(): void {
     this.deps.setMotion("thinking", 0.6);
-    this.deps.logTiming("brain: generating contextual question (bank exhausted)");
+    this.deps.logTiming("brain: generating contextual question");
 
     const observations = this.deps.getObservations();
     const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
