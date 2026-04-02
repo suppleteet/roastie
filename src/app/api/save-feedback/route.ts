@@ -70,7 +70,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    console.log(`[save-feedback] [${feedbackType}] "${text.slice(0, 80)}" → ${filename}`);
+    // Log full feedback to console so it appears in Vercel function logs (disk is ephemeral)
+    console.log(`[save-feedback] [${feedbackType}] ${JSON.stringify(entry)}`);
     return NextResponse.json({ ok: true, filename });
   } catch (err) {
     console.error("[save-feedback]", err);
