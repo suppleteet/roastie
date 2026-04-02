@@ -63,6 +63,8 @@ export interface ComedianBrainDeps {
   /** Optional: pre-seed for testing */
   initialHopper?: ScoredJoke[];
   initialLedger?: LedgerEntry[];
+  /** Pre-fetched greeting result — if set, enterGreeting() skips generation. */
+  prefetchedGreeting?: Promise<JokeResponse | null>;
 }
 
 // ─── Fisher-Yates shuffle ───────────────────────────────────────────────────────
@@ -354,17 +356,21 @@ export class ComedianBrain {
     }
 
     // Late transcription during generation — STT tokens still arriving after silence timer fired.
+    // Only restart if we haven't begun delivering yet. Once delivery starts, the answer is committed.
     if (this.state === "generating") {
+      const oldAnswer = this.answerBuffer.trim();
+      this._accumulateAnswer(text, finished);
+      const newAnswer = this.answerBuffer.trim();
+      // If the buffer didn't materially change (just whitespace/punctuation), don't bounce.
+      if (isSimilarAnswer(oldAnswer, newAnswer)) {
+        this.deps.logTiming(`brain: late transcription during generating (similar) — "${text}" → no restart`);
+        return;
+      }
       this._clearTimers();
       this.deps.cancelSpeech();
-      this._accumulateAnswer(text, finished);
-      this.deps.logTiming(`brain: late transcription during generating — "${text}" → buffer now "${this.answerBuffer}"`);
-      if (!COMEDIAN_CONFIG.skipPreGeneration) {
-        this._transition("pre_generate");
-        this._cancelSpeculative();
-      } else {
-        this._transition("wait_answer");
-      }
+      this.deps.logTiming(`brain: late transcription during generating — "${text}" → buffer now "${newAnswer}" (restarting)`);
+      this._transition("pre_generate");
+      this._cancelSpeculative();
       this._startLateSilenceTimer();
       return;
     }
@@ -513,18 +519,23 @@ export class ComedianBrain {
     this.greetingSpeechQueued = false;
     this.visionReadyForGreeting = true;
 
-    // Fire greeting generation immediately with webcam frame — don't wait for /api/analyze.
-    // Gemini Flash gets the raw image and can see everything it needs.
-    const observations = this.deps.getObservations();
-    const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
-
     this.deps.setMotion("thinking", 0.6);
 
-    this.visionJokePrefetch = this._generateJoke({
-      context: "greeting",
-      observations,
-      imageBase64: frame,
-    });
+    // Use prefetched greeting if available (fired during Gemini Live connect to save time),
+    // otherwise generate fresh.
+    if (this.deps.prefetchedGreeting) {
+      this.visionJokePrefetch = this.deps.prefetchedGreeting;
+      this.deps.logTiming("brain: using prefetched greeting");
+    } else {
+      const observations = this.deps.getObservations();
+      const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
+      this.visionJokePrefetch = this._generateJoke({
+        context: "greeting",
+        observations,
+        imageBase64: frame,
+      });
+      this.deps.logTiming("brain: greeting generation fired (no prefetch)");
+    }
 
     this.visionJokePrefetch.then((response) => {
       if (this.state !== "greeting") return;
@@ -544,8 +555,6 @@ export class ComedianBrain {
       // If drain already fired while we were generating, advance now
       this._maybeAdvanceFromGreeting();
     });
-
-    this.deps.logTiming("brain: greeting generation fired" + (frame ? " (with image)" : " (no image)"));
   }
 
   private _maybeAdvanceFromGreeting(): void {

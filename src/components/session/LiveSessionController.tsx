@@ -139,6 +139,10 @@ export default function LiveSessionController({
 
   function queueSpeak(text: string, motion?: MotionState, intensity?: number): void {
     if (!text.trim() || !isRunningRef.current) return;
+    // Reveal puppet on first queued speech — TTS latency ≈ fade duration
+    if (!useSessionStore.getState().puppetRevealed) {
+      useSessionStore.getState().setPuppetRevealed(true);
+    }
     useSessionStore.getState().pushTranscriptEntry("puppet", text.trim());
     wasDrainedRef.current = false; // reset edge so drain detection fires when this plays through
     const gen = ttsGenerationRef.current;
@@ -494,25 +498,6 @@ export default function LiveSessionController({
     }
   }
 
-  // ─── Thumb gesture detection (dev voice notes) ───────────────────────────────
-
-  const THUMBS_DOWN_KW = ["thumbs down", "thumb down"];
-  const THUMBS_UP_KW = ["thumbs up", "thumb up"];
-
-  function detectThumbGesture(observations: string[]) {
-    if (!COMEDIAN_CONFIG.devNotesEnabled) return;
-    const lower = observations.map((o) => o.toLowerCase());
-    const down = lower.some((obs) => THUMBS_DOWN_KW.some((kw) => obs.includes(kw)));
-    const up = lower.some((obs) => THUMBS_UP_KW.some((kw) => obs.includes(kw)));
-    const currentBrainState = useSessionStore.getState().brainState;
-
-    if (down && currentBrainState !== "dev_note") {
-      brainRef.current?.enterDevNote();
-    } else if (up && currentBrainState === "dev_note") {
-      useSessionStore.getState().requestDevNoteResume();
-    }
-  }
-
   // ─── Webcam + Vision ──────────────────────────────────────────────────────────
 
   function startWebcamSend() {
@@ -562,7 +547,6 @@ export default function LiveSessionController({
           useSessionStore.getState().setObservations(obs);
           brainRef.current?.onVisionUpdate(obs);
           detectExpression(obs);
-          detectThumbGesture(obs);
         } else {
           clearLaughter();
         }
@@ -740,6 +724,25 @@ export default function LiveSessionController({
     useSessionStore.getState().clearTranscriptHistory();
     useSessionStore.getState().logTiming("live: starting session");
 
+    // Prefetch greeting BEFORE building the brain — starts generating while Gemini Live connects.
+    // Captures webcam frame now so the greeting can reference what the model sees.
+    const greetingFrame = webcamRef.current?.captureFrame();
+    const greetingPrefetch = fetch("/api/generate-joke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        context: "greeting",
+        persona: useSessionStore.getState().activePersona,
+        burnIntensity: useSessionStore.getState().burnIntensity,
+        contentMode: useSessionStore.getState().contentMode,
+        observations: useSessionStore.getState().observations,
+        imageBase64: greetingFrame,
+      }),
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .catch(() => null) as Promise<import("@/app/api/generate-joke/route").JokeResponse | null>;
+    useSessionStore.getState().logTiming("live: greeting prefetch fired");
+
     // Build ComedianBrain
     brainRef.current = new ComedianBrain({
       queueSpeak,
@@ -760,6 +763,7 @@ export default function LiveSessionController({
       setUserAnswer: (a) => useSessionStore.getState().setUserAnswer(a),
       logTiming: (e) => useSessionStore.getState().logTiming(e),
       revealSession: () => useSessionStore.getState().setHasSpokenThisSession(true),
+      prefetchedGreeting: greetingPrefetch,
       saveCritique: (text, ctx) => {
         fetch("/api/save-feedback", {
           method: "POST",
@@ -781,6 +785,7 @@ export default function LiveSessionController({
         console.warn("[live] mic start failed:", e);
         brainRef.current?.setMicAvailable(false);
       });
+
       // Create comedian chat session in parallel (non-blocking — falls back to stateless if it fails)
       const store = useSessionStore.getState();
       fetch("/api/comedian-session", {
@@ -827,6 +832,7 @@ export default function LiveSessionController({
       kickoffTimeRef.current = Date.now();
       useSessionStore.getState().setTimeToFirstSpeechMs(null);
       useSessionStore.getState().setHasSpokenThisSession(false);
+      useSessionStore.getState().setPuppetRevealed(false);
 
       // Check camera availability
       const frame = webcamRef.current?.captureFrame();
@@ -878,6 +884,7 @@ export default function LiveSessionController({
     if (geminiWaitingSpanRef.current) { store.endSpan(geminiWaitingSpanRef.current); geminiWaitingSpanRef.current = null; }
 
     store.setHasSpokenThisSession(false);
+    store.setPuppetRevealed(false);
 
     stopWebcamSend();
     stopVisionSend();

@@ -64,6 +64,10 @@ Silero VAD ─────── mic audio ────→ onSpeechEnd → Comed
 ComedianBrain ──→ /api/generate-joke (Gemini Flash) → joke text + motion
              └──→ /api/tts (ElevenLabs) → gapless playback via usePcmPlayback
 
+/api/comedian-session → creates multi-turn Gemini Chat (persona loaded once)
+  └── generate-joke/generate-speak reuse the Chat via sessionId
+      (falls back to stateless full-prompt if session missing/expired)
+
 /api/analyze ────→ webcam observations → ComedianBrain.onVisionUpdate()
 ```
 
@@ -84,13 +88,13 @@ State config lives in `src/lib/comedianBrainConfig.ts`. Timing in `src/lib/comed
 ## Architecture
 
 ```
-src/app/api/           Next.js API routes (analyze, generate-joke, rephrase-question, generate-speak, roast, tts, tts-ws, vision, live-token, save-transcript, save-video, save-log, save-feedback, serve-video, open-videos-folder, ambient-context)
+src/app/api/           Next.js API routes (analyze, comedian-session, generate-joke, generate-speak, rephrase-question, roast, tts, tts-ws, vision, live-token, save-transcript, save-video, save-log, save-feedback, serve-video, open-videos-folder, ambient-context)
 src/components/puppet/ Three.js puppet inside R3F Canvas
 src/components/session/ SessionController (monologue), LiveSessionController (conversation)
 src/components/audio/  AudioPlayer (monologue), useMicCapture + usePcmPlayback + useVad (conversation)
 src/components/recording/ MediaRecorder + offscreen canvas compositor
 src/components/ui/     Screen overlays (landing, consent, HUD, share, FeedbackBox, DebugTranscript)
-src/lib/               Pure utilities, constants, prompts, personas, audioUtils, motionInference, elTtsStream
+src/lib/               Pure utilities, constants, prompts, personas, audioUtils, motionInference, elTtsStream, chatSessionStore
 src/lib/stateMachine/      State machine types, transitions, and configs (SessionPhase, BrainState, MotionState)
 src/lib/comedianBrain.ts   State machine class (conversation mode)
 src/lib/comedianBrainConfig.ts  Declarative STATE_CONFIG map

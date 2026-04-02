@@ -14,7 +14,7 @@
  */
 
 export const GLOBAL_COMEDY_GUIDELINES: string[] = [
-  // Populated by wrapup distillation — initially empty
+  "Questions should feel like a comedian setting up a roast, not a job interview — avoid earnest/sentimental prompts like 'What are you most proud of?' or 'What do you like about yourself?' in favor of questions that naturally produce roastable answers",
 ];
 
 export const PERSONA_COMEDY_GUIDELINES: Record<string, string[]> = {
