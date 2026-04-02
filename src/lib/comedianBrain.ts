@@ -652,19 +652,17 @@ export class ComedianBrain {
       this.pendingFollowUp = null;
       this.followUpCount = 0;
 
-      // Find next question, skipping any excluded by previously asked questions
+      // Find next question from bank, or generate one contextually
       question = this._nextValidQuestion();
-      if (!question) {
-        // All questions exhausted — fall to vision-only mode, wait for interesting changes
-        this.visionOnlyMode = true;
-        this._transition("check_vision");
-        this.deps.logTiming("brain: all questions exhausted, entering vision-only mode");
-        this.deps.setMotion("idle", 0.3);
-        return;
+      if (question) {
+        this.askedQuestionIds.add(question.id);
+        this.currentQuestion = question;
+        this._queueQuestionWithBridge(this.currentQuestion.question);
+      } else {
+        // Bank exhausted — generate a contextual question based on what we see + know
+        this._generateContextualQuestion();
+        return; // async — will set currentQuestion when it resolves
       }
-      this.askedQuestionIds.add(question.id);
-      this.currentQuestion = question;
-      this._queueQuestionWithBridge(this.currentQuestion.question);
     }
 
     if (!this.currentQuestion) return;
@@ -1127,6 +1125,60 @@ export class ComedianBrain {
     this.deps.queueSpeak(`${bridge} ${questionText}`, "emphasis", 0.6);
   }
 
+  /** Generate a contextual question via LLM based on what we see + know. */
+  private _generateContextualQuestion(): void {
+    this.deps.setMotion("thinking", 0.6);
+    this.deps.logTiming("brain: generating contextual question (bank exhausted)");
+
+    const observations = this.deps.getObservations();
+    const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
+
+    fetch("/api/generate-question", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        persona: this.deps.getPersona(),
+        observations,
+        setting: this.deps.getVisionSetting(),
+        knownFacts: this._getThrowbackContext(),
+        conversationSoFar: this._getLedgerContext(),
+        imageBase64: frame,
+      }),
+    })
+      .then((r) => r.json())
+      .then((data: { question: string; jokeContext: string }) => {
+        if (this.state !== "ask_question") return; // stale
+        const questionText = data.question;
+        this.currentQuestion = {
+          id: `generated_${Date.now()}`,
+          question: questionText,
+          jokeContext: data.jokeContext,
+          prodLines: [
+            "Come on, I'm waiting.",
+            "I asked you a question.",
+          ],
+        };
+        this.deps.setCurrentQuestion(questionText);
+        this._addLedger("question", questionText, []);
+        this._queueQuestionWithBridge(questionText);
+        this.deps.logTiming(`brain: contextual question — "${questionText}"`);
+      })
+      .catch(() => {
+        if (this.state !== "ask_question") return;
+        // Fallback — ask where they are
+        const fallback = "So where are you right now? What am I looking at back there?";
+        this.currentQuestion = {
+          id: "generated_fallback",
+          question: fallback,
+          jokeContext: "Location and environment roast.",
+          prodLines: ["Hello? Where are you?", "I'm talking to you."],
+        };
+        this.deps.setCurrentQuestion(fallback);
+        this._addLedger("question", fallback, []);
+        this._queueQuestionWithBridge(fallback);
+      });
+  }
+
   /** Pre-queue the next question's TTS while the current joke is still playing.
    *  Calls queueSpeak immediately so TTS is already streaming when the joke finishes — no gap. */
   private _preQueueNextQuestion(): void {
@@ -1134,7 +1186,7 @@ export class ComedianBrain {
     if (this.visionOnlyMode) return;
 
     const q = this._nextValidQuestion();
-    if (!q) return;
+    if (!q) return; // bank exhausted — contextual question will be generated in enterAskQuestion
 
     this.preQueuedQuestion = q;
     this.preQueuedTextReady = true;
