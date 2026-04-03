@@ -61,9 +61,9 @@ export function streamElTts({
       JSON.stringify({
         text: " ",
         voice_settings: {
-          stability: 0.25,
+          stability: 0.45,
           similarity_boost: 0.85,
-          style: 0.7,
+          style: 0.45,
           use_speaker_boost: true,
         },
         xi_api_key: apiKey,
