@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
 
     const body = (await req.json()) as {
       text?: string;
-      type?: "post-session" | "critique";
+      type?: "post-session" | "critique" | "joke-rating";
       persona?: string;
       lastJokeText?: string;
       videoFilename?: string | null;
@@ -34,7 +34,9 @@ export async function POST(req: NextRequest) {
     await mkdir(FEEDBACK_DIR, { recursive: true });
 
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const prefix = feedbackType === "critique" ? "critique" : "feedback";
+    const prefix = feedbackType === "critique" ? "critique"
+      : feedbackType === "joke-rating" ? "joke-rating"
+      : "feedback";
     const filename = `${prefix}-${ts}.json`;
 
     const entry: Record<string, unknown> = {
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
       createdAt: new Date().toISOString(),
     };
 
-    if (feedbackType === "critique" && body.lastJokeText) {
+    if ((feedbackType === "critique" || feedbackType === "joke-rating") && body.lastJokeText) {
       entry.lastJokeText = body.lastJokeText;
     }
     if (body.videoFilename) {
@@ -62,7 +64,7 @@ export async function POST(req: NextRequest) {
 
     // Prune old feedback (both types)
     const files = (await readdir(FEEDBACK_DIR))
-      .filter((f) => (f.startsWith("feedback-") || f.startsWith("critique-")) && f.endsWith(".json"))
+      .filter((f) => (f.startsWith("feedback-") || f.startsWith("critique-") || f.startsWith("joke-rating-")) && f.endsWith(".json"))
       .sort();
     if (files.length > MAX_FEEDBACK) {
       for (const old of files.slice(0, files.length - MAX_FEEDBACK)) {

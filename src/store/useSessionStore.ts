@@ -86,6 +86,7 @@ interface SessionState {
   conversationEvents: ConversationEvent[];
   timeToFirstSpeechMs: number | null;
   hasSpokenThisSession: boolean;
+  puppetRevealed: boolean; // true once first joke text is ready (before TTS audio)
   lastVisionCallTs: number | null;
 
   // Comedian Brain state (conversation mode)
@@ -100,6 +101,7 @@ interface SessionState {
 
   // Transcript history for debug panel
   transcriptHistory: { role: "user" | "puppet"; text: string; ts: number }[];
+  jokeRatings: Record<number, "up" | "down">; // keyed by transcript entry ts
 
   // Session timer — set when phase enters "roasting"
   sessionStartTs: number | null;
@@ -142,6 +144,7 @@ interface SessionState {
   clearConversationEvents: () => void;
   setTimeToFirstSpeechMs: (ms: number | null) => void;
   setHasSpokenThisSession: (spoken: boolean) => void;
+  setPuppetRevealed: (revealed: boolean) => void;
   setLastVisionCallTs: (ts: number | null) => void;
   setBrainState: (state: BrainState | null) => void;
   setCurrentQuestion: (q: string | null) => void;
@@ -155,6 +158,7 @@ interface SessionState {
   beginSpan: (row: TimelineRow, label: string, color?: string) => string;
   endSpan: (id: string) => void;
   clearTimelineSpans: () => void;
+  rateJoke: (ts: number, rating: "up" | "down") => void;
   clearTranscriptHistory: () => void;
   reset: () => void;
 }
@@ -183,6 +187,7 @@ const initialState = {
   conversationEvents: [] as ConversationEvent[],
   timeToFirstSpeechMs: null as number | null,
   hasSpokenThisSession: false,
+  puppetRevealed: false,
   lastVisionCallTs: null as number | null,
   brainState: null as BrainState | null,
   currentQuestion: null as string | null,
@@ -193,6 +198,7 @@ const initialState = {
   smileFrames: 0,
   totalVisionFrames: 0,
   transcriptHistory: [] as { role: "user" | "puppet"; text: string; ts: number }[],
+  jokeRatings: {} as Record<number, "up" | "down">,
   timelineSpans: [] as TimelineSpan[],
   sessionStartTs: null as number | null,
   pendingDebugTranscription: null as string | null,
@@ -248,6 +254,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   clearConversationEvents: () => set({ conversationEvents: [] }),
   setTimeToFirstSpeechMs: (timeToFirstSpeechMs) => set({ timeToFirstSpeechMs }),
   setHasSpokenThisSession: (hasSpokenThisSession) => set({ hasSpokenThisSession }),
+  setPuppetRevealed: (puppetRevealed) => set({ puppetRevealed }),
   setLastVisionCallTs: (lastVisionCallTs) => set({ lastVisionCallTs }),
   setBrainState: (brainState) => set({ brainState }),
   setCurrentQuestion: (currentQuestion) => set({ currentQuestion }),
@@ -282,7 +289,26 @@ export const useSessionStore = create<SessionState>((set) => ({
       ),
     })),
   clearTimelineSpans: () => set({ timelineSpans: [] }),
-  clearTranscriptHistory: () => set({ transcriptHistory: [] }),
+  rateJoke: (ts, rating) => {
+    set((s) => ({ jokeRatings: { ...s.jokeRatings, [ts]: rating } }));
+    // Find the joke text for this timestamp
+    const entry = useSessionStore.getState().transcriptHistory.find(
+      (e) => e.ts === ts && e.role === "puppet"
+    );
+    if (!entry) return;
+    // Fire-and-forget save to feedback log
+    fetch("/api/save-feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "joke-rating",
+        text: `${rating === "up" ? "👍" : "👎"} ${entry.text}`,
+        persona: useSessionStore.getState().activePersona,
+        lastJokeText: entry.text,
+      }),
+    }).catch(() => {});
+  },
+  clearTranscriptHistory: () => set({ transcriptHistory: [], jokeRatings: {} }),
   setSessionStartTs: (sessionStartTs) => set({ sessionStartTs }),
   submitDebugTranscription: (text) => set({ pendingDebugTranscription: text }),
   clearPendingDebugTranscription: () => set({ pendingDebugTranscription: null }),

@@ -33,7 +33,7 @@ export default function LandingScreen() {
           className="w-5 h-5 rounded accent-cyan-500 cursor-pointer flex-shrink-0"
         />
         <span className="text-sm text-gray-400 text-left group-hover:text-white/70 transition-colors">
-          Share my location
+          Share my location (just for jokes)
         </span>
       </label>
 

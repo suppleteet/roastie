@@ -30,6 +30,8 @@ export default function DebugTranscript() {
   const observations = useSessionStore((s) => s.observations);
   const visionSetting = useSessionStore((s) => s.visionSetting);
   const isUserLaughing = useSessionStore((s) => s.isUserLaughing);
+  const jokeRatings = useSessionStore((s) => s.jokeRatings);
+  const rateJoke = useSessionStore((s) => s.rateJoke);
 
   // Auto-scroll to bottom on new entries
   useEffect(() => {
@@ -124,13 +126,38 @@ export default function DebugTranscript() {
                 ) : (
                   transcriptHistory.map((entry, i) => {
                     const isUser = entry.role === "user";
+                    const rating = jokeRatings[entry.ts];
                     return (
-                      <div key={i} className={`mb-0.5 ${isUser ? "text-cyan-300/80" : "text-orange-300/80"}`}>
-                        <span className="text-white/20">{relTime(entry.ts, sessionStartTs)}</span>{" "}
-                        <span className={`font-bold ${isUser ? "text-cyan-400" : "text-orange-400"}`}>
-                          {isUser ? "YOU" : "🎭"}
-                        </span>{" "}
-                        {entry.text}
+                      <div key={i} className={`mb-0.5 flex items-start gap-1 ${isUser ? "text-cyan-300/80" : "text-orange-300/80"}`}>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-white/20">{relTime(entry.ts, sessionStartTs)}</span>{" "}
+                          <span className={`font-bold ${isUser ? "text-cyan-400" : "text-orange-400"}`}>
+                            {isUser ? "YOU" : "🎭"}
+                          </span>{" "}
+                          {entry.text}
+                        </div>
+                        {!isUser && (
+                          <span className="flex-shrink-0 flex gap-px mt-px">
+                            <button
+                              onClick={() => rateJoke(entry.ts, "up")}
+                              className={`px-0.5 rounded text-[9px] leading-none transition-colors ${
+                                rating === "up"
+                                  ? "text-green-400 bg-green-400/20"
+                                  : "text-white/20 hover:text-green-400/70"
+                              }`}
+                              title="Good joke"
+                            >▲</button>
+                            <button
+                              onClick={() => rateJoke(entry.ts, "down")}
+                              className={`px-0.5 rounded text-[9px] leading-none transition-colors ${
+                                rating === "down"
+                                  ? "text-red-400 bg-red-400/20"
+                                  : "text-white/20 hover:text-red-400/70"
+                              }`}
+                              title="Bad joke"
+                            >▼</button>
+                          </span>
+                        )}
                       </div>
                     );
                   })

@@ -42,6 +42,7 @@ function MainApp() {
   const activePersona = useSessionStore((s) => s.activePersona);
   const setActivePersona = useSessionStore((s) => s.setActivePersona);
   const hasSpokenThisSession = useSessionStore((s) => s.hasSpokenThisSession);
+  const puppetRevealed = useSessionStore((s) => s.puppetRevealed);
   const lastVisionCallTs = useSessionStore((s) => s.lastVisionCallTs);
   const brainState = useSessionStore((s) => s.brainState);
   const IS_DEV = process.env.NODE_ENV !== "production";
@@ -375,8 +376,17 @@ function MainApp() {
 
       {showPuppet && (
         <div className="relative w-full max-w-[560px] aspect-square">
-          {/* Dark overlay — fades out over 2s when first TTS audio chunk arrives */}
-          <div className={`absolute inset-0 bg-black z-10 pointer-events-none transition-opacity duration-[2000ms] ${hasSpokenThisSession ? "opacity-0" : "opacity-100"}`} />
+          {/* Dark overlay — fades out over 2s when first joke text is ready (before TTS audio) */}
+          <div className={`absolute inset-0 bg-black z-10 pointer-events-none transition-opacity duration-[2000ms] ${puppetRevealed ? "opacity-0" : "opacity-100"}`}>
+            {phase === "roasting" && !puppetRevealed && (
+              <div className="flex items-center justify-center h-full">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <p className="text-white/50 text-sm font-medium animate-pulse">Sizing you up…</p>
+                </div>
+              </div>
+            )}
+          </div>
           <PuppetScene canvasRef={puppetCanvasRef} />
           {/* Webcam PIP — bottom-right, mirrored; hidden once stream stops */}
           <video
