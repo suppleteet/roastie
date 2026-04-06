@@ -29,6 +29,7 @@
 | @vitejs/plugin-react | ^6.0.1 | Vite/Vitest React plugin |
 | @vitest/ui | ^4.1.0 | Vitest UI dashboard |
 | @types/ws | ^8.18.1 | TypeScript types for ws |
+| @vercel/blob | ^2.3.3 | Durable feedback storage (Vercel Blob) |
 | jsdom | ^29.0.0 | DOM environment for Vitest |
 
 ## AI Models in Use
@@ -126,7 +127,7 @@ src/puppet/            Paper-thin puppet-specific layer
 
 1. **useFrame + store**: Inside `useFrame`, ALWAYS use `useSessionStore.getState()`, never `useSessionStore(selector)`. React hooks cannot run inside rAF callbacks.
 2. **API routes use Gemini**: Despite `@anthropic-ai/sdk` being installed, all current routes use `@google/genai`.
-3. **ElevenLabs uses raw fetch/WebSocket**: `/api/tts` uses `fetch()` (REST), `/api/tts-ws` and `generate-speak` use `ws` (WebSocket streaming). `elTtsStream.ts` is the shared server-side helper. Do not refactor to the ElevenLabs SDK without testing streaming.
+3. **ElevenLabs uses raw fetch/WebSocket**: `/api/tts` uses `fetch()` (REST), `/api/tts-ws` uses `ws` (WebSocket streaming via `elTtsStream.ts`). `/api/generate-speak` streams joke text only (no TTS). Do not refactor to the ElevenLabs SDK without testing streaming.
 4. **Zustand v5**: `create<SessionState>((set) => ...)` — no curried form.
 5. **No `any`**: strict mode is on. Comment-justify any type assertion.
 6. **LiveSessionController uses getState()**: All store access in WebSocket callbacks and long-lived closures must use `useSessionStore.getState()` to avoid stale closures. Only `phase` is subscribed via selector (for lifecycle).
@@ -176,4 +177,5 @@ npm run test:e2e      # Playwright (requires dev server on :3000)
 GEMINI_API_KEY
 ELEVENLABS_API_KEY
 ELEVENLABS_VOICE_ID   (optional, defaults to Rachel)
+BLOB_READ_WRITE_TOKEN (Vercel Blob — feedback persistence)
 ```

@@ -21,6 +21,7 @@
     "@react-three/drei": "^10.3.5",
     "@react-three/fiber": "^9.1.2",
     "@ricky0123/vad-web": "^0.0.30",
+    "@vercel/blob": "^2.3.3",
     "autoprefixer": "^10.4.27",
     "elevenlabs": "^1.57.0",
     "next": "^16.1.6",

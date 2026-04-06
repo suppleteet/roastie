@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { writeFile, mkdir, readdir, unlink } from "fs/promises";
-import path from "path";
+import { put } from "@vercel/blob";
 
 export const dynamic = "force-dynamic";
 
-const FEEDBACK_DIR = path.join(process.cwd(), ".debug", "feedback");
-const MAX_FEEDBACK = 100;
 const MAX_BODY = 2_000_000; // 2 MB
 
 export async function POST(req: NextRequest) {
@@ -31,14 +28,6 @@ export async function POST(req: NextRequest) {
 
     const feedbackType = body.type ?? "post-session";
 
-    await mkdir(FEEDBACK_DIR, { recursive: true });
-
-    const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const prefix = feedbackType === "critique" ? "critique"
-      : feedbackType === "joke-rating" ? "joke-rating"
-      : "feedback";
-    const filename = `${prefix}-${ts}.json`;
-
     const entry: Record<string, unknown> = {
       type: feedbackType,
       text,
@@ -56,25 +45,20 @@ export async function POST(req: NextRequest) {
       entry.sessionLog = body.sessionLog;
     }
 
-    await writeFile(
-      path.join(FEEDBACK_DIR, filename),
-      JSON.stringify(entry, null, 2),
-      "utf-8",
-    );
+    // Persist to Vercel Blob (durable) + console log (ephemeral backup)
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const prefix = feedbackType === "critique" ? "critique"
+      : feedbackType === "joke-rating" ? "joke-rating"
+      : "feedback";
+    const blobPath = `feedback/${prefix}-${ts}.json`;
 
-    // Prune old feedback (both types)
-    const files = (await readdir(FEEDBACK_DIR))
-      .filter((f) => (f.startsWith("feedback-") || f.startsWith("critique-") || f.startsWith("joke-rating-")) && f.endsWith(".json"))
-      .sort();
-    if (files.length > MAX_FEEDBACK) {
-      for (const old of files.slice(0, files.length - MAX_FEEDBACK)) {
-        await unlink(path.join(FEEDBACK_DIR, old)).catch(() => {});
-      }
-    }
+    const blob = await put(blobPath, JSON.stringify(entry, null, 2), {
+      contentType: "application/json",
+      access: "public",
+    });
 
-    // Log full feedback to console so it appears in Vercel function logs (disk is ephemeral)
-    console.log(`[save-feedback] [${feedbackType}] ${JSON.stringify(entry)}`);
-    return NextResponse.json({ ok: true, filename });
+    console.log(`[save-feedback] [${feedbackType}] saved to ${blob.url}`);
+    return NextResponse.json({ ok: true, url: blob.url });
   } catch (err) {
     console.error("[save-feedback]", err);
     return NextResponse.json({ error: "Failed to save feedback" }, { status: 500 });

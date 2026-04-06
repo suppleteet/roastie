@@ -51,27 +51,12 @@ Do **not** create memories for things already in CLAUDE.md or derivable from rea
 
 ### 4c — Comedy Feedback Distillation
 
-Read all files in `.debug/feedback/` (both `feedback-*.json` and `critique-*.json`).
+Use the `/feedback` skill to fetch and distill user feedback. The skill handles:
+1. Fetching from Vercel Blob (production) and `.debug/feedback/` (local)
+2. Displaying a summary table
+3. Distilling patterns into `src/lib/comedyGuidelines.ts`
 
-If no feedback files exist, skip this step.
-
-For each file, extract:
-- The feedback text
-- The type (`post-session` text vs in-session `critique`)
-- The persona active at the time (if available)
-- The joke that triggered the critique (if available, in `lastJokeText`)
-
-Using comedy expertise, analyze the accumulated feedback and update `src/lib/comedyGuidelines.ts`:
-
-1. **Read the current file** to see existing guidelines
-2. **Distill new patterns** — do NOT log specific jokes or user quotes. Extract GENERAL PRINCIPLES like:
-   - "Audiences find [category] jokes too harsh at high intensity"
-   - "Self-deprecating humor gets better reactions than direct attacks on [X]"
-   - "Questions about [topic] tend to produce flat material"
-3. **Determine scope**: If feedback consistently mentions a specific persona, add to `PERSONA_COMEDY_GUIDELINES[personaId]`. If it's about the overall experience, add to `GLOBAL_COMEDY_GUIDELINES`.
-4. **Merge, don't replace**: New insights should be ADDED to existing guidelines. If a new insight contradicts an existing one, refine it. If feedback validates an existing guideline, leave it.
-5. **Keep it concise**: Maximum 15 global guidelines + 5 per persona. Consolidate if over.
-6. **After updating**, delete the processed feedback files from `.debug/feedback/` — the guidelines are the persistent artifact.
+If no feedback exists in either location, skip this step.
 
 ### 4d — Report what changed
 
