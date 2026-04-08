@@ -1080,9 +1080,12 @@ export class ComedianBrain {
         clearTimeout(fallbackTimer);
         if (this.deliveryGeneration !== gen) return; // stale stream — ignore
         if (this.state !== "generating" && this.state !== "delivering") return;
+        // Cancel fallback speech if it fired before the real joke arrived
+        if (fallbackFired) {
+          this.deps.cancelSpeech();
+          fallbackFired = false; // only cancel once
+        }
         if (this.state === "generating") {
-          // First joke arrived — cancel any fallback speech that's already queued
-          if (fallbackFired) this.deps.cancelSpeech();
           this._transition("delivering");
           this.deps.setMotion("energetic", 0.8);
         }
