@@ -1277,25 +1277,32 @@ export class ComedianBrain {
 
     // Check if prefetch completed while current joke was playing
     const prefetch = this.pipelinePrefetch;
-    if (prefetch?.done && prefetch.jokes.length > 0) {
-      this.deps.logTiming("brain: using prefetched pipeline joke (zero wait)");
+    if (prefetch?.done) {
       this.pipelinePrefetch = null;
       this.pipelinePrefetchAbort = null;
 
-      this._transition("delivering");
-      this.deps.setMotion("energetic", 0.8);
-      for (const joke of prefetch.jokes) {
-        this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
-        this.pipelinePreviousJokes.push(joke.text);
-        this._addLedger("joke", joke.text, []);
-        this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
-        this.lastJokeIntensity = joke.intensity;
+      if (prefetch.jokes.length > 0) {
+        // Prefetch ready but not yet queued — queue now
+        this.deps.logTiming("brain: using prefetched pipeline joke (zero wait)");
+        this._transition("delivering");
+        this.deps.setMotion("energetic", 0.8);
+        for (const joke of prefetch.jokes) {
+          this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
+          this.pipelinePreviousJokes.push(joke.text);
+          this._addLedger("joke", joke.text, []);
+          this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
+          this.lastJokeIntensity = joke.intensity;
+        }
+        if (prefetch.meta?.followUp) this.pendingFollowUp = prefetch.meta.followUp;
+        if (prefetch.meta?.tags?.length) this._addLedger("answer", answer, prefetch.meta.tags);
+        this._preQueueNextQuestion();
+        return;
+      } else {
+        // Jokes were already eagerly queued from the prefetch callback — TTS is in the chain.
+        // Just advance; drain detection will handle the rest.
+        this.deps.logTiming("brain: pipeline joke already eagerly queued — advancing");
+        return;
       }
-      if (prefetch.meta?.followUp) this.pendingFollowUp = prefetch.meta.followUp;
-      if (prefetch.meta?.tags?.length) this._addLedger("answer", answer, prefetch.meta.tags);
-      // Pre-queue next question TTS while this joke plays — eliminates dead air after delivery
-      this._preQueueNextQuestion();
-      return;
     }
 
     // Prefetch not ready or failed — generate fresh (streaming)
@@ -1526,6 +1533,26 @@ export class ComedianBrain {
       prefetch.meta = { followUp: response.followUp, tags: response.tags };
       prefetch.done = true;
       this.deps.logTiming(`brain: pipeline prefetch ready (${response.jokes.length} jokes)`);
+
+      // Queue jokes immediately so TTS prefetch starts while current joke is still playing.
+      // When _pipelineNextJoke fires on drain, it will find the prefetch consumed and
+      // the TTS already in the chain — zero wait.
+      if (this.state === "delivering" && prefetch.jokes.length > 0) {
+        for (const joke of prefetch.jokes) {
+          this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
+          this.pipelinePreviousJokes.push(joke.text);
+          this._addLedger("joke", joke.text, []);
+          this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
+          this.lastJokeIntensity = joke.intensity;
+        }
+        if (prefetch.meta?.followUp) this.pendingFollowUp = prefetch.meta.followUp;
+        if (prefetch.meta?.tags?.length) this._addLedger("answer", answer, prefetch.meta.tags);
+        // Pre-queue next question TTS for gapless transition after this joke
+        this._preQueueNextQuestion();
+        // Mark as consumed so _pipelineNextJoke skips straight to _onDeliveringDrained
+        prefetch.jokes = [];
+        this.deps.logTiming("brain: pipeline joke queued eagerly (TTS prefetch started)");
+      }
     }).catch(() => { /* aborted or failed — _pipelineNextJoke falls back to fresh generation */ });
   }
 
