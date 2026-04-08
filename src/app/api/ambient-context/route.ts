@@ -55,9 +55,10 @@ export async function POST(req: NextRequest) {
     let region = "";
     if (geoResp?.ok) {
       const geo = await geoResp.json();
-      // Only use city-level fields — principalSubdivision is state/county (e.g. "North Pinal"),
-      // NOT a city. Falling through to it caused the model to say county names on air.
-      city = geo.city || geo.locality || "unknown";
+      // Prefer locality over city — BigDataCloud sometimes puts county/district names
+      // in the "city" field (e.g. "North Pinal" instead of "San Tan Valley").
+      // locality is more specific and gives the actual place name.
+      city = geo.locality || geo.city || "unknown";
       region = geo.principalSubdivision || geo.countryName || "";
     }
 
