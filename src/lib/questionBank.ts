@@ -18,7 +18,26 @@ export interface ComedyQuestion {
   prodLines: string[];
   /** IDs of questions that should be excluded from the session if this one is asked */
   excludes?: string[];
+  /** Confidence threshold — confirm answer if confidence is below this (0-1). Higher = confirm more often. */
+  confirmThreshold?: number;
+  /** Templates for confirming the answer. {answer} is replaced with the transcription. */
+  confirmTemplates?: string[];
 }
+
+/** Default confirm templates used for questions without custom ones (including contextual questions). */
+export const DEFAULT_CONFIRM_TEMPLATES = [
+  "{answer}?",
+  "I heard {answer}. That right?",
+  "{answer} — did I get that?",
+];
+
+/** Lines spoken when confidence is too low to even attempt confirmation. */
+export const REJECT_TEMPLATES = [
+  "I didn't catch that. Say again?",
+  "What was that?",
+  "One more time.",
+  "Sorry — say that again?",
+];
 
 export const QUESTION_BANK: ComedyQuestion[] = [
   {
@@ -29,6 +48,13 @@ export const QUESTION_BANK: ComedyQuestion[] = [
       "I asked your name, not for a moment of silence.",
       "It's two words — well, usually. What do I call you?",
     ],
+    confirmThreshold: 0.8,
+    confirmTemplates: [
+      "{answer}?",
+      "Wait — {answer}?",
+      "{answer}, is that right?",
+      "Did you say {answer}?",
+    ],
   },
   {
     id: "job",
@@ -37,6 +63,12 @@ export const QUESTION_BANK: ComedyQuestion[] = [
     prodLines: [
       "You do something for money, right? Or is the vibe just... independently vibing?",
       "Job, career, hustle, grift — whatever you call it. What is it?",
+    ],
+    confirmThreshold: 0.5,
+    confirmTemplates: [
+      "A {answer}? Really?",
+      "{answer}. That tracks.",
+      "{answer}?",
     ],
   },
   {

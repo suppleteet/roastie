@@ -19,7 +19,8 @@ import type { BrainState, MicMode } from "@/lib/comedianBrainConfig";
 import { STATE_CONFIG } from "@/lib/comedianBrainConfig";
 import { COMEDIAN_CONFIG } from "@/lib/comedianConfig";
 import { getRandomFallback } from "@/lib/fallbackRoasts";
-import { QUESTION_BANK, type ComedyQuestion } from "@/lib/questionBank";
+import { QUESTION_BANK, DEFAULT_CONFIRM_TEMPLATES, REJECT_TEMPLATES, type ComedyQuestion } from "@/lib/questionBank";
+import { transcriptConfidence, CONFIDENCE_THRESHOLDS } from "@/lib/transcriptConfidence";
 import { diffObservations } from "@/lib/visionDiff";
 import type { JokeResponse, JokeItem } from "@/app/api/generate-joke/route";
 import { PERSONAS, type PersonaId } from "@/lib/personas";
@@ -195,6 +196,12 @@ export class ComedianBrain {
   private lastJokeMotion: import("@/lib/motionStates").MotionState = "emphasis";
   private lastJokeIntensity = 0.75;
 
+  // Confirmation state
+  private pendingConfirmAnswer = "";
+  private confirmBuffer = "";
+  private confirmAttempts = 0;
+  private confirmTimer: ReturnType<typeof setTimeout> | null = null;
+
   // Greeting state
   private visionReadyForGreeting = false;
   private greetingTtsDrained = false;
@@ -319,6 +326,16 @@ export class ComedianBrain {
    * If we already have transcript text from Gemini, complete the answer immediately.
    */
   onVadSpeechEnd(): void {
+    // During confirmation: VAD speech-end completes the yes/no response
+    if (this.state === "confirm_answer") {
+      const response = this.confirmBuffer.trim();
+      if (!response) return; // no transcript yet
+      this.deps.logTiming(`brain: VAD speech-end in confirm → "${response}"`);
+      this._clearConfirmTimer();
+      this._processConfirmResponse();
+      return;
+    }
+
     if (this.state !== "wait_answer" && this.state !== "pre_generate") return;
     const answer = this.answerBuffer.trim();
     if (!answer) return; // no transcript yet — let the silence timer handle it
@@ -353,6 +370,19 @@ export class ComedianBrain {
       this._accumulateAnswer(text, finished);
       this._transition("wait_answer");
       this._startAnswerSilenceTimer();
+      return;
+    }
+
+    // Confirmation state: accumulate into confirmBuffer for yes/no classification
+    if (this.state === "confirm_answer") {
+      this._clearConfirmTimer();
+      if (finished && text.trim()) {
+        this.confirmBuffer = text;
+      } else {
+        this.confirmBuffer = smartJoin(this.confirmBuffer, text);
+      }
+      this.deps.logTiming(`brain: confirm heard "${text}" → buffer "${this.confirmBuffer}"`);
+      this._startConfirmSilenceTimer();
       return;
     }
 
@@ -490,6 +520,10 @@ export class ComedianBrain {
       case "ask_question":
         this.enterWaitAnswer();
         break;
+      case "confirm_answer":
+        // Confirm prompt finished playing — start listening for yes/no
+        this._startConfirmListenTimer();
+        break;
       case "prodding":
         // Prod finished playing with no interruption — start next prod or skip
         this.prodCount++;
@@ -623,6 +657,7 @@ export class ComedianBrain {
     this._transition("ask_question");
     this.answerBuffer = "";
     this.prodCount = 0;
+    this.confirmAttempts = 0;
     this.deps.setUserAnswer("");
 
     // Determine which question to ask
@@ -780,7 +815,167 @@ export class ComedianBrain {
       this.enterProdding();
       return;
     }
+
+    // Confidence gate — reject garbage, confirm dubious, pass clean answers through
+    if (COMEDIAN_CONFIG.confirmationEnabled) {
+      const qId = this.currentQuestion?.id ?? "";
+      const confidence = transcriptConfidence(answer, qId);
+      const threshold = this.currentQuestion?.confirmThreshold ?? CONFIDENCE_THRESHOLDS.defaultConfirm;
+
+      if (confidence < CONFIDENCE_THRESHOLDS.reject) {
+        // Garbage — reject outright, ask again.
+        // Use ask_question so onTtsQueueDrained → enterWaitAnswer() starts prod timers.
+        this.deps.logTiming(`brain: reject transcript (confidence=${confidence.toFixed(2)}) — "${answer}"`);
+        this.answerBuffer = "";
+        this.deps.setUserAnswer("");
+        const line = REJECT_TEMPLATES[Math.floor(Math.random() * REJECT_TEMPLATES.length)];
+        this.deps.queueSpeak(line, "conspiratorial", 0.5);
+        this._cancelSpeculative();
+        this._transition("ask_question");
+        return;
+      }
+
+      if (confidence < threshold) {
+        // Low confidence — confirm before proceeding
+        this.deps.logTiming(`brain: confirm transcript (confidence=${confidence.toFixed(2)}, threshold=${threshold}) — "${answer}"`);
+        this._cancelSpeculative();
+        this.enterConfirmAnswer(answer);
+        return;
+      }
+    }
+
     this.enterGenerating(answer);
+  }
+
+  // ─── Answer confirmation ─────────────────────────────────────────────────────
+
+  private enterConfirmAnswer(answer: string): void {
+    this._transition("confirm_answer");
+    this.pendingConfirmAnswer = answer;
+    this.confirmBuffer = "";
+    this.confirmAttempts++; // 1 = first attempt; at maxConfirmAttempts, proceeds without re-confirming
+    this.deps.setMotion("conspiratorial", 0.6);
+
+    // Pick a template — question-specific or default
+    const templates = this.currentQuestion?.confirmTemplates ?? DEFAULT_CONFIRM_TEMPLATES;
+    const template = templates[Math.floor(Math.random() * templates.length)];
+    const line = template.replaceAll("{answer}", answer);
+
+    this.deps.queueSpeak(line, "conspiratorial", 0.6);
+    this.deps.logTiming(`brain: confirm — "${line}" (attempt ${this.confirmAttempts})`);
+  }
+
+  /** Start listening timer after confirm prompt finishes playing. */
+  private _startConfirmListenTimer(): void {
+    this._clearConfirmTimer();
+    // Silence after prompt = implicit yes (user didn't object)
+    this.confirmTimer = setTimeout(() => {
+      if (this.state !== "confirm_answer") return;
+      this.deps.logTiming(`brain: confirm timeout (${COMEDIAN_CONFIG.confirmTimeoutMs}ms) — implicit yes for "${this.pendingConfirmAnswer}"`);
+      this._confirmAccepted();
+    }, COMEDIAN_CONFIG.confirmTimeoutMs);
+  }
+
+  /** Start short silence timer after user starts responding to confirmation. */
+  private _startConfirmSilenceTimer(): void {
+    this._clearConfirmTimer();
+    this.confirmTimer = setTimeout(() => {
+      if (this.state !== "confirm_answer") return;
+      this._processConfirmResponse();
+    }, COMEDIAN_CONFIG.confirmSilenceMs);
+  }
+
+  private _clearConfirmTimer(): void {
+    if (this.confirmTimer) { clearTimeout(this.confirmTimer); this.confirmTimer = null; }
+  }
+
+  private _confirmAccepted(): void {
+    this._clearConfirmTimer();
+    this.confirmAttempts = 0;
+    this.answerBuffer = this.pendingConfirmAnswer;
+    this.deps.setUserAnswer(this.answerBuffer);
+    this.deps.logTiming(`brain: confirmed — "${this.pendingConfirmAnswer}"`);
+    this.enterGenerating(this.pendingConfirmAnswer);
+  }
+
+  private _processConfirmResponse(): void {
+    const response = this.confirmBuffer.trim();
+    if (!response) {
+      // No response heard — treat as implicit yes
+      this._confirmAccepted();
+      return;
+    }
+
+    const classification = ComedianBrain._classifyConfirmResponse(response);
+    this.deps.logTiming(`brain: confirm response "${response}" → ${classification}`);
+
+    switch (classification) {
+      case "affirm":
+        this._confirmAccepted();
+        break;
+
+      case "deny_correction": {
+        // Extract corrected answer — strip leading negation
+        const corrected = response.replace(/^(no+|nah|nope|wrong)[,.]?\s*/i, "").trim();
+        // Strip common filler phrases before the actual answer
+        const cleaned = corrected.replace(/^(it's|its|it is|i said|my name is|i'm|im|actually)\s+/i, "").trim();
+        if (!cleaned) {
+          // They said "no" with filler but no actual correction — treat as bare deny
+          this._confirmDenied();
+          break;
+        }
+        if (this.confirmAttempts >= COMEDIAN_CONFIG.maxConfirmAttempts) {
+          // Max attempts — proceed with the correction without re-confirming
+          this.deps.logTiming(`brain: max confirm attempts — proceeding with "${cleaned}"`);
+          this.pendingConfirmAnswer = cleaned;
+          this._confirmAccepted();
+        } else {
+          // Re-confirm with the corrected answer
+          this.enterConfirmAnswer(cleaned);
+        }
+        break;
+      }
+
+      case "deny_bare":
+        this._confirmDenied();
+        break;
+
+      case "restate":
+        // User restated their answer without saying no — treat as a new answer
+        if (this.confirmAttempts >= COMEDIAN_CONFIG.maxConfirmAttempts) {
+          this.deps.logTiming(`brain: max confirm attempts — proceeding with restatement "${response}"`);
+          this.pendingConfirmAnswer = response;
+          this._confirmAccepted();
+        } else {
+          this.enterConfirmAnswer(response);
+        }
+        break;
+    }
+  }
+
+  private _confirmDenied(): void {
+    this._clearConfirmTimer();
+    this.confirmAttempts = 0;
+    this.answerBuffer = "";
+    this.deps.setUserAnswer("");
+    this.deps.queueSpeak("One more time?", "conspiratorial", 0.5);
+    // Use ask_question so onTtsQueueDrained → enterWaitAnswer() starts prod timers
+    this._transition("ask_question");
+    this.deps.logTiming("brain: confirm denied — back to ask_question (will enter wait_answer on TTS drain)");
+  }
+
+  private static readonly AFFIRM_RE = /^(yes|yeah|yep|yup|correct|right|that's right|uh-huh|mhm|mm-?hm|sure|exactly)/i;
+  private static readonly DENY_RE = /^(nope|nah|no+|wrong)/i;
+
+  static _classifyConfirmResponse(text: string): "affirm" | "deny_correction" | "deny_bare" | "restate" {
+    const trimmed = text.trim();
+    if (ComedianBrain.AFFIRM_RE.test(trimmed)) return "affirm";
+    if (ComedianBrain.DENY_RE.test(trimmed)) {
+      // Check if there are additional words after the negation (= correction)
+      const afterNegation = trimmed.replace(ComedianBrain.DENY_RE, "").replace(/^[,.\s]+/, "").trim();
+      return afterNegation.length > 0 ? "deny_correction" : "deny_bare";
+    }
+    return "restate";
   }
 
   // Short non-word filler reactions — play immediately when generating starts so there's no dead air.
@@ -1630,6 +1825,7 @@ export class ComedianBrain {
     if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
     if (this.prodTimer) { clearTimeout(this.prodTimer); this.prodTimer = null; }
     if (this.devNoteTimer) { clearTimeout(this.devNoteTimer); this.devNoteTimer = null; }
+    this._clearConfirmTimer();
   }
 
   private _getPersonaGreetings(): string[] {

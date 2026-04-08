@@ -47,6 +47,7 @@ test.describe("Full Roast Run", () => {
         greetingVisionTimeoutMs: 600,
         hopperMaxSize: 4,
         visionIntervalMs: 3000,
+        confirmationEnabled: false, // debug text input bypasses mic — skip confirmation in E2E
       };
       // Prevent session rotation from firing during the test (default 90s)
       (window as unknown as Record<string, unknown>).__SESSION_ROTATE_MS__ = 600_000;
@@ -63,7 +64,7 @@ test.describe("Full Roast Run", () => {
     const debugInput = page.getByPlaceholder("type answer (enter to submit)…");
     // States that confirm the brain received an answer and left wait_answer
     const POST_ANSWER_STATES = [
-      "pre_generate", "generating", "delivering",
+      "pre_generate", "generating", "delivering", "confirm_answer",
       "check_vision", "vision_react", "ask_question", "prodding",
     ] as const;
 

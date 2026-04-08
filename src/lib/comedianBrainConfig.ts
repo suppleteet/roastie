@@ -22,6 +22,7 @@ export const STATE_CONFIG: Record<BrainState, StateDefinition> = {
   generating:   { next: "delivering",    micMode: "passive",   canSkipTo: null },
   delivering:   { next: "check_vision",  micMode: "passive",   canSkipTo: null },
   dev_note:     { next: "check_vision",  micMode: "off",       canSkipTo: "check_vision" },
+  confirm_answer: { next: "generating",  micMode: "listening", canSkipTo: "check_vision" },
   redirecting:  { next: "wait_answer",   micMode: "passive",   canSkipTo: null },
   check_vision: { next: "ask_question",  micMode: "passive",   canSkipTo: null },
   vision_react: { next: "ask_question",  micMode: "passive",   canSkipTo: null },

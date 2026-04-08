@@ -271,7 +271,7 @@ describe("ComedianBrain — irrelevant answers", () => {
     const brain = new ComedianBrain(deps);
     await driveToWaitAnswer(brain);
     vi.stubGlobal("fetch", mockFetchResponse(IRRELEVANT_RESPONSE));
-    brain.onInputTranscription("something completely unrelated");
+    brain.onInputTranscription("My name is something unrelated");
     vi.advanceTimersByTime(600); // trigger silence timer
     // Need to let the async fetch resolve
     await vi.runAllTimersAsync();
@@ -352,5 +352,230 @@ describe("ComedianBrain — vision react", () => {
     const states = getStates(deps);
     // Check that check_vision was visited
     expect(states).toContain("check_vision");
+  });
+});
+
+// ─── Answer confirmation ─────────────────────────────────────────────────────
+
+describe("ComedianBrain — answer confirmation", () => {
+  it("confirms low-confidence name answer", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+
+    // Lowercase single word — below name threshold (0.8)
+    brain.onInputTranscription("tyler", true);
+    vi.advanceTimersByTime(400); // silence timer fires → _onAnswerComplete
+
+    const states = getStates(deps);
+    expect(states).toContain("confirm_answer");
+    // Should have spoken a confirmation template
+    expect(deps.queueSpeak).toHaveBeenCalledWith(
+      expect.stringContaining("tyler"),
+      "conspiratorial",
+      0.6,
+    );
+  });
+
+  it("proceeds without confirmation for high-confidence name", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+
+    // Capitalized name — above threshold
+    brain.onInputTranscription("Tyler", true);
+    vi.advanceTimersByTime(400);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const states = getStates(deps);
+    expect(states).not.toContain("confirm_answer");
+    expect(states).toContain("generating");
+  });
+
+  it("accepts confirmation with 'yes'", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+
+    // Trigger confirmation
+    brain.onInputTranscription("tyler", true);
+    vi.advanceTimersByTime(400);
+
+    // Confirm prompt TTS drains → starts listening
+    brain.onTtsQueueDrained();
+
+    // User says yes
+    brain.onInputTranscription("yes", true);
+    vi.advanceTimersByTime(300); // confirm silence timer
+
+    await vi.advanceTimersByTimeAsync(0);
+    const states = getStates(deps);
+    expect(states).toContain("generating");
+  });
+
+  it("handles deny with correction", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+
+    // Trigger confirmation
+    brain.onInputTranscription("tyler", true);
+    vi.advanceTimersByTime(400);
+    brain.onTtsQueueDrained(); // confirm prompt plays
+
+    // User corrects: "no, Taylor"
+    brain.onInputTranscription("no, Taylor", true);
+    vi.advanceTimersByTime(300);
+
+    // Should re-confirm with the corrected name
+    const states = getStates(deps);
+    // Still in confirm_answer (re-confirming)
+    expect(states.filter((s) => s === "confirm_answer").length).toBeGreaterThanOrEqual(2);
+    expect(deps.queueSpeak).toHaveBeenCalledWith(
+      expect.stringContaining("Taylor"),
+      "conspiratorial",
+      0.6,
+    );
+  });
+
+  it("handles bare deny — returns to ask_question", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+
+    brain.onInputTranscription("tyler", true);
+    vi.advanceTimersByTime(400);
+    brain.onTtsQueueDrained();
+
+    brain.onInputTranscription("no", true);
+    vi.advanceTimersByTime(300);
+
+    const states = getStates(deps);
+    // Should be back in ask_question (waiting for "One more time?" TTS to drain)
+    expect(states).toContain("ask_question");
+    expect(deps.queueSpeak).toHaveBeenCalledWith("One more time?", "conspiratorial", 0.5);
+  });
+
+  it("rejects garbage transcription outright", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+
+    // Punctuation only — confidence 0.0
+    brain.onInputTranscription("...", true);
+    vi.advanceTimersByTime(400);
+
+    const states = getStates(deps);
+    // Should NOT enter confirm_answer — should go to ask_question (reject)
+    expect(states).not.toContain("confirm_answer");
+    expect(states).toContain("ask_question");
+  });
+
+  it("implicit yes on silence timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+
+    brain.onInputTranscription("tyler", true);
+    vi.advanceTimersByTime(400);
+    brain.onTtsQueueDrained(); // confirm prompt plays → starts confirm listen timer
+
+    // No response — wait for confirmTimeoutMs (3000)
+    vi.advanceTimersByTime(3100);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const states = getStates(deps);
+    expect(states).toContain("generating");
+  });
+
+  it("VAD speech-end during confirm completes response", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+
+    brain.onInputTranscription("tyler", true);
+    vi.advanceTimersByTime(400);
+    brain.onTtsQueueDrained();
+
+    brain.onInputTranscription("yeah", true);
+    // VAD fires immediately
+    brain.onVadSpeechEnd();
+
+    await vi.advanceTimersByTimeAsync(0);
+    const states = getStates(deps);
+    expect(states).toContain("generating");
+  });
+
+  it("proceeds after maxConfirmAttempts corrections", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+
+    // First confirm: "tyler" (lowercase, confidence < 0.8)
+    brain.onInputTranscription("tyler", true);
+    vi.advanceTimersByTime(400);
+    brain.onTtsQueueDrained(); // confirm prompt plays
+
+    // First correction: "no, taylor"
+    brain.onInputTranscription("no, taylor", true);
+    vi.advanceTimersByTime(300);
+    // Re-confirms with "taylor" (attempt 2 = maxConfirmAttempts)
+    brain.onTtsQueueDrained(); // second confirm prompt plays
+
+    // Second correction: "no, tayla" — at max attempts, should proceed
+    brain.onInputTranscription("no, tayla", true);
+    vi.advanceTimersByTime(300);
+
+    await vi.advanceTimersByTimeAsync(0);
+    const states = getStates(deps);
+    expect(states).toContain("generating");
+  });
+});
+
+// ─── Classify confirm response ──────────────────────────────────────────────
+
+describe("ComedianBrain._classifyConfirmResponse", () => {
+  it("classifies affirmative responses", () => {
+    expect(ComedianBrain._classifyConfirmResponse("yes")).toBe("affirm");
+    expect(ComedianBrain._classifyConfirmResponse("Yeah")).toBe("affirm");
+    expect(ComedianBrain._classifyConfirmResponse("yep")).toBe("affirm");
+    expect(ComedianBrain._classifyConfirmResponse("correct")).toBe("affirm");
+    expect(ComedianBrain._classifyConfirmResponse("that's right")).toBe("affirm");
+    expect(ComedianBrain._classifyConfirmResponse("mhm")).toBe("affirm");
+  });
+
+  it("classifies bare denials", () => {
+    expect(ComedianBrain._classifyConfirmResponse("no")).toBe("deny_bare");
+    expect(ComedianBrain._classifyConfirmResponse("nah")).toBe("deny_bare");
+    expect(ComedianBrain._classifyConfirmResponse("nope")).toBe("deny_bare");
+  });
+
+  it("classifies denials with correction", () => {
+    expect(ComedianBrain._classifyConfirmResponse("no, Taylor")).toBe("deny_correction");
+    expect(ComedianBrain._classifyConfirmResponse("no it's Taylor")).toBe("deny_correction");
+    expect(ComedianBrain._classifyConfirmResponse("nope, my name is Taylor")).toBe("deny_correction");
+  });
+
+  it("classifies restatements", () => {
+    expect(ComedianBrain._classifyConfirmResponse("Taylor")).toBe("restate");
+    expect(ComedianBrain._classifyConfirmResponse("my name is Taylor")).toBe("restate");
   });
 });

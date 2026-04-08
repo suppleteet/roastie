@@ -60,6 +60,7 @@ export class ComedianBrainDriver extends LiveSessionMock {
         visionIntervalMs: 200,
         greetingVisionTimeoutMs: 300,
         hopperMaxSize: 4,
+        confirmationEnabled: false, // E2E tests bypass mic — skip confirmation by default
       };
     });
   }

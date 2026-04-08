@@ -78,11 +78,13 @@ ComedianBrain ──→ /api/generate-joke (Gemini Flash) → joke text + motion
 
 ## Brain State Machine
 
-States (in order): `greeting` → `ask_question` → `wait_answer` → `pre_generate` → `generating` → `delivering` → `check_vision` → `vision_react` (or back to `ask_question`)
+States (in order): `greeting` → `ask_question` → `wait_answer` → `pre_generate` → `confirm_answer` (if low confidence) → `generating` → `delivering` → `check_vision` → `vision_react` (or back to `ask_question`)
 
 Note: `greeting` is LLM-generated (not canned strings) and includes the first vision joke. The old `vision_jokes` state is still defined but greeting now advances directly to `ask_question`.
 
 Silence states: `prodding` (after answerWaitMs with no speech), `redirecting` (irrelevant answer).
+
+Answer confirmation: `confirm_answer` gates answers with heuristic confidence scoring (`transcriptConfidence.ts`). Names always confirmed unless very confident; other questions only on low confidence. Canned templates (no LLM call). Handles yes/no/correction responses. Silence after prompt = implicit yes (3s).
 
 State config lives in `src/lib/comedianBrainConfig.ts`. Timing in `src/lib/comedianConfig.ts`.
 
@@ -100,7 +102,8 @@ src/lib/stateMachine/      State machine types, transitions, and configs (Sessio
 src/lib/comedianBrain.ts   State machine class (conversation mode)
 src/lib/comedianBrainConfig.ts  Declarative STATE_CONFIG map
 src/lib/comedianConfig.ts  All timing/threshold tuning parameters (window-injectable for tests)
-src/lib/questionBank.ts    7 questions with prod lines (hot-swappable)
+src/lib/questionBank.ts    4 questions with prod lines + confirm templates (hot-swappable)
+src/lib/transcriptConfidence.ts  Heuristic confidence scoring for STT transcriptions
 src/lib/visionDiff.ts      Observation diff + interest scoring
 src/store/             Zustand store (useSessionStore.ts)
 public/worklets/       AudioWorklet processors (mic-capture-processor.js)

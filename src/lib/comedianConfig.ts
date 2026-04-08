@@ -36,6 +36,12 @@ const defaults = {
   devNotesEnabled: false,      // thumbs-down pauses brain, starts recording; thumbs-up resumes
   devNoteTimeoutMs: 60_000,    // auto-resume after 60s if no thumbs-up
 
+  // Answer confirmation
+  confirmationEnabled: true,    // confirm answers when confidence is low
+  maxConfirmAttempts: 2,        // max re-confirms before proceeding with best guess
+  confirmSilenceMs: 200,        // silence timer for yes/no responses (shorter — expect brief answers)
+  confirmTimeoutMs: 3000,       // silence after confirm prompt = implicit yes
+
   // Latency experiments (temporary)
   skipGreeting: false,         // skip greeting → jump straight to ask_question
   skipPreGeneration: false,   // speculative pre-generation fires after 1st word in wait_answer
