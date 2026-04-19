@@ -609,6 +609,7 @@ export class ComedianBrain {
       const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
       this.visionJokePrefetch = this._generateJoke({
         context: "greeting",
+        model: "gemini-2.5-flash", // greeting always uses Gemini — fastest + best at vision
         observations,
         imageBase64: frame,
       });
@@ -1517,8 +1518,28 @@ export class ComedianBrain {
   /** Pre-queue the next question's TTS while the current joke is still playing.
    *  Calls queueSpeak immediately so TTS is already streaming when the joke finishes — no gap. */
   private _preQueueNextQuestion(): void {
-    if (this.pendingFollowUp) return;
     if (this.visionOnlyMode) return;
+
+    // If there's a follow-up, pre-queue it directly — no LLM call needed
+    if (this.pendingFollowUp) {
+      const followUpText = this.pendingFollowUp;
+      // Clear now so enterAskQuestion uses the preQueuedQuestion path (not pendingFollowUp, which double-queues)
+      this.pendingFollowUp = null;
+      this.followUpCount++;
+      this.preQueuedQuestion = {
+        id: "follow_up",
+        question: followUpText,
+        jokeContext: "Answer-driven follow-up question.",
+        prodLines: [
+          "I'm waiting. The audience is waiting.",
+          "Hello? Anyone home?",
+        ],
+      };
+      this.preQueuedTextReady = true;
+      this._queueQuestionWithBridge(followUpText);
+      this.deps.logTiming(`brain: pre-queued follow-up: "${followUpText.slice(0, 40)}"`);
+      return;
+    }
 
     const q = this._nextValidQuestion();
     if (!q) return; // bank exhausted — contextual question will be generated in enterAskQuestion
@@ -2028,6 +2049,8 @@ export class ComedianBrain {
   private async _generateJoke(
     params: {
       context: "greeting" | "vision_opening" | "answer_roast" | "vision_react" | "hopper";
+      /** Override the roast model for this request (e.g. Gemini Flash for vision-reactive jokes). */
+      model?: string;
       question?: string;
       userAnswer?: string;
       fillerAlreadySaid?: string;
@@ -2046,8 +2069,8 @@ export class ComedianBrain {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...params,
           model: this.deps.getRoastModel(),
+          ...params,
           sessionId: this.deps.getSessionId(),
           persona: this.deps.getPersona(),
           burnIntensity: this.deps.getBurnIntensity(),
