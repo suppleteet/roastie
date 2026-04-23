@@ -2,12 +2,38 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 import { GoogleGenAI } from "@google/genai";
 import { getRoastSystemPrompt, getGreetingSystemPrompt } from "@/lib/prompts";
-import { ROAST_MODEL } from "@/lib/constants";
+import { VISION_MODEL } from "@/lib/constants";
 import { extractJson } from "@/lib/jsonUtils";
 import type { BurnIntensity } from "@/lib/prompts";
 import { PERSONA_IDS, DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const ANALYZE_RETRY_DELAYS_MS = [250, 700];
+
+function isTransientAnalyzeError(err: unknown): boolean {
+  const status = (err as { status?: number }).status;
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) return true;
+  return message.includes("unavailable") || message.includes("try again later") || message.includes("overloaded");
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function generateWithRetry(args: Parameters<typeof ai.models.generateContent>[0]) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await ai.models.generateContent(args);
+    } catch (err) {
+      if (attempt < ANALYZE_RETRY_DELAYS_MS.length && isTransientAnalyzeError(err)) {
+        await sleep(ANALYZE_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
 
 type RoastSentenceRaw = { text: string; motion: string; intensity: number };
 
@@ -22,8 +48,8 @@ export async function POST(req: NextRequest) {
 
     // Vision-only mode: fast, focused call that returns only observations
     if (mode === "vision") {
-      const response = await ai.models.generateContent({
-        model: ROAST_MODEL,
+      const response = await generateWithRetry({
+        model: VISION_MODEL,
         contents: [
           {
             role: "user",
@@ -51,8 +77,8 @@ Keep it compact. Return ONLY the JSON object.` },
         ? getGreetingSystemPrompt(personaId)
         : getRoastSystemPrompt(burnIntensity as BurnIntensity, personaId);
 
-    const response = await ai.models.generateContent({
-      model: ROAST_MODEL,
+      const response = await generateWithRetry({
+      model: VISION_MODEL,
       contents: [
         {
           role: "user",

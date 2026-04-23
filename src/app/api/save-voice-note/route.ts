@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { writeFile, mkdir, readdir, unlink } from "fs/promises";
 import path from "path";
 import { GoogleGenAI } from "@google/genai";
-import { ROAST_MODEL } from "@/lib/constants";
+import { VISION_MODEL } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     let transcript = "";
     try {
       const response = await ai.models.generateContent({
-        model: ROAST_MODEL,
+        model: VISION_MODEL,
         contents: [
           {
             role: "user",

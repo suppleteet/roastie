@@ -61,9 +61,12 @@ function makeDeps(overrides?: Partial<ComedianBrainDeps>): ComedianBrainDeps {
     getPersona: vi.fn().mockReturnValue("kvetch"),
     getBurnIntensity: vi.fn().mockReturnValue(3),
     getContentMode: vi.fn().mockReturnValue("clean"),
+    getRoastModel: vi.fn().mockReturnValue("gemini-2.5-flash"),
+    getInputAmplitude: vi.fn().mockReturnValue(0.1),
     getObservations: vi.fn().mockReturnValue([]),
     getVisionSetting: vi.fn().mockReturnValue(null),
     getAmbientContext: vi.fn().mockReturnValue(null),
+    getTownFlavor: vi.fn().mockReturnValue(null),
     getSessionId: vi.fn().mockReturnValue(null),
     setBrainState: vi.fn(),
     setCurrentQuestion: vi.fn(),
@@ -371,11 +374,16 @@ describe("ComedianBrain — answer confirmation", () => {
 
     const states = getStates(deps);
     expect(states).toContain("confirm_answer");
-    // Should have spoken a confirmation template
+    // Echo + tail filler (no explicit "what did you say?")
     expect(deps.queueSpeak).toHaveBeenCalledWith(
-      expect.stringContaining("tyler"),
+      expect.stringMatching(/tyler/i),
       "conspiratorial",
-      0.6,
+      0.65,
+    );
+    expect(deps.queueSpeak).toHaveBeenCalledWith(
+      expect.stringMatching(/[.?!]$/),
+      "thinking",
+      0.55,
     );
   });
 
@@ -440,9 +448,9 @@ describe("ComedianBrain — answer confirmation", () => {
     // Still in confirm_answer (re-confirming)
     expect(states.filter((s) => s === "confirm_answer").length).toBeGreaterThanOrEqual(2);
     expect(deps.queueSpeak).toHaveBeenCalledWith(
-      expect.stringContaining("Taylor"),
+      expect.stringMatching(/Taylor/i),
       "conspiratorial",
-      0.6,
+      0.65,
     );
   });
 

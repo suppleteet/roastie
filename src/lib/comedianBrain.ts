@@ -19,7 +19,14 @@ import type { BrainState, MicMode } from "@/lib/comedianBrainConfig";
 import { STATE_CONFIG } from "@/lib/comedianBrainConfig";
 import { COMEDIAN_CONFIG } from "@/lib/comedianConfig";
 
-import { QUESTION_BANK, DEFAULT_CONFIRM_TEMPLATES, REJECT_TEMPLATES, type ComedyQuestion } from "@/lib/questionBank";
+import {
+  QUESTION_BANK,
+  CONFIRM_TAIL_FILLERS,
+  DEFAULT_CONFIRM_ECHO_TEMPLATES,
+  ECHO_REJECTION_TEMPLATES,
+  REJECT_TEMPLATES,
+  type ComedyQuestion,
+} from "@/lib/questionBank";
 import { transcriptConfidence, CONFIDENCE_THRESHOLDS } from "@/lib/transcriptConfidence";
 import { diffObservations } from "@/lib/visionDiff";
 import type { JokeResponse, JokeItem } from "@/app/api/generate-joke/route";
@@ -52,6 +59,8 @@ export interface ComedianBrainDeps {
   getObservations: () => string[];
   getVisionSetting: () => string | null;
   getAmbientContext: () => import("@/store/useSessionStore").AmbientContext | null;
+  /** Optional async local culture/vibe line (filled after geolocation). */
+  getTownFlavor: () => string | null;
   /** LLM model ID for joke generation (e.g. "gemini-2.5-flash", "gpt-4o"). */
   getRoastModel: () => string;
   /** Current mic input RMS (0-1) — used for background noise gating. */
@@ -92,6 +101,37 @@ function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+function lastWordToken(text: string): string {
+  const match = text.match(/([A-Za-z0-9]+)[^A-Za-z0-9]*$/);
+  return match?.[1] ?? "";
+}
+
+function normalizeForConfirm(text: string): string {
+  return text
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[,.;:!?-]+/, "")
+    .replace(/[,.;:!?-]+$/, "")
+    .trim();
+}
+
+function shouldStartSpeculative(answerBuffer: string): boolean {
+  const trimmed = answerBuffer.trim();
+  const words = wordCount(trimmed);
+  if (words >= 2) return true;
+  if (words === 1) {
+    // Avoid speculative calls on very short partial chunks ("Ty", "No", "Uh").
+    // This reduces false starts before STT finishes the first word.
+    const token = trimmed.split(/\s+/)[0] ?? "";
+    return token.length >= 4;
+  }
+  return false;
+}
+
+function normalizeAnswerToken(text: string): string {
+  return text.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, "").trim();
+}
+
 // ─── Smart transcript joining ────────────────────────────────────────────────────
 // Gemini sends syllable-level chunks ("Ye", "s", ", one", "dog.").
 // Blind space-join produces "Ye s , one dog." — garbled. This helper joins
@@ -110,9 +150,14 @@ function smartJoin(buffer: string, chunk: string): string {
   // Previous buffer ends with space or opening bracket — no extra space
   if (/[\s(["']$/.test(lastChar)) return buffer + chunk;
 
-  // Previous buffer ends with a letter and chunk starts with lowercase letter —
-  // likely a word continuation ("Ye" + "s" → "Yes")
-  if (/[a-zA-Z]$/.test(lastChar) && /^[a-z]/.test(firstChar)) return buffer + chunk;
+  // Previous buffer ends with a letter and chunk starts with lowercase letter.
+  // Only join when at least one side is very short (syllable-level continuation),
+  // e.g. "Ye" + "s" -> "Yes". For normal words ("a" + "dentist"), add a space.
+  if (/[a-zA-Z]$/.test(lastChar) && /^[a-z]/.test(firstChar)) {
+    const prevToken = lastWordToken(buffer);
+    const nextToken = chunk.trimStart().match(/^[a-z]+/)?.[0] ?? "";
+    if (prevToken.length <= 2 || nextToken.length <= 2) return buffer + chunk;
+  }
 
   // Digit followed by digit — likely a number continuation ("4" + "2" → "42")
   if (/[0-9]$/.test(lastChar) && /^[0-9]/.test(firstChar)) return buffer + chunk;
@@ -159,6 +204,8 @@ export class ComedianBrain {
   private preQueuedTextReady = false;
   private rephraseAbort: AbortController | null = null;
   private answerBuffer = "";
+  /** True once Gemini Live sent inputTranscription with finished=true for this answer turn. */
+  private sttHadFinalSegment = false;
   private earlyListenActivated = false; // true once question TTS is nearly done — gate for early answer capture
   private fillerFiredForAnswer = false; // prevent double filler on late-transcription re-entry
   /** Incremented each time enterGenerating fires — stale stream callbacks check this to avoid double delivery. */
@@ -198,6 +245,7 @@ export class ComedianBrain {
   // Availability flags
   private micAvailable = true;
   private cameraAvailable = true;
+  private vadAvailable = true;
 
   // Last delivered joke motion — used to match question inflection
   private lastJokeMotion: import("@/lib/motionStates").MotionState = "emphasis";
@@ -297,6 +345,10 @@ export class ComedianBrain {
     this.cameraAvailable = available;
   }
 
+  setVadAvailable(available: boolean): void {
+    this.vadAvailable = available;
+  }
+
   // ─── Dev voice notes (gesture-triggered) ──────────────────────────────────────
 
   /** Called when vision detects thumbs-down — pauses the brain for a voice note. */
@@ -347,6 +399,22 @@ export class ComedianBrain {
     if (this.state !== "wait_answer" && this.state !== "pre_generate") return;
     const answer = this.answerBuffer.trim();
     if (!answer) return; // no transcript yet — let the silence timer handle it
+
+    // Silero often fires on a mid-sentence breath before Gemini marks the segment final.
+    // Completing here queues the generating filler and cuts the user off. For multi-word
+    // answers, wait for authoritative STT (`finished`) or the silence fallback timer.
+    if (
+      wordCount(answer) >= 3 &&
+      !this.sttHadFinalSegment
+    ) {
+      this.deps.logTiming(
+        `brain: VAD speech-end deferred (no final STT yet) — "${answer.slice(0, 48)}"`,
+      );
+      this._clearTimers();
+      this._startAnswerSilenceTimer();
+      return;
+    }
+
     this.deps.logTiming(`brain: VAD speech-end → completing "${answer.slice(0, 40)}"`);
     this._clearTimers();
     this._onAnswerComplete();
@@ -390,7 +458,11 @@ export class ComedianBrain {
         this.confirmBuffer = smartJoin(this.confirmBuffer, text);
       }
       this.deps.logTiming(`brain: confirm heard "${text}" → buffer "${this.confirmBuffer}"`);
-      this._startConfirmSilenceTimer();
+      if (finished) {
+        this._processConfirmResponse();
+      } else {
+        this._startConfirmSilenceTimer();
+      }
       return;
     }
 
@@ -400,6 +472,34 @@ export class ComedianBrain {
       const oldAnswer = this.answerBuffer.trim();
       this._accumulateAnswer(text, finished);
       const newAnswer = this.answerBuffer.trim();
+      const appended = newAnswer.toLowerCase().startsWith(oldAnswer.toLowerCase())
+        ? newAnswer.slice(oldAnswer.length).trim()
+        : "";
+
+      // Late "yeah that's right" tails after a confirm prompt should not mutate
+      // the committed answer and trigger another confirm loop.
+      if (appended && ComedianBrain._isAffirmationTail(appended)) {
+        this.deps.logTiming(`brain: late affirmation during generating — "${appended}" → no restart`);
+        this.answerBuffer = oldAnswer;
+        this.deps.setUserAnswer(this.answerBuffer);
+        return;
+      }
+
+      // Explicit correction ("no, I said ...") should force a restart even if
+      // similarity heuristics say it's "close".
+      if (
+        ComedianBrain._hasCorrectionCue(text) ||
+        (appended && ComedianBrain._hasCorrectionCue(appended))
+      ) {
+        this._clearTimers();
+        this.deps.cancelSpeech();
+        this.deps.logTiming(`brain: correction cue during generating — "${text}" (restarting)`);
+        this._transition("pre_generate");
+        this._cancelSpeculative();
+        this._startLateSilenceTimer();
+        return;
+      }
+
       // If the buffer didn't materially change (just whitespace/punctuation), don't bounce.
       if (isSimilarAnswer(oldAnswer, newAnswer)) {
         this.deps.logTiming(`brain: late transcription during generating (similar) — "${text}" → no restart`);
@@ -445,22 +545,29 @@ export class ComedianBrain {
     if (this.state === "wait_answer" || this.state === "pre_generate") {
       this._clearTimers();
       this._accumulateAnswer(text, finished);
+      if (finished) this.sttHadFinalSegment = true;
       this.deps.logTiming(`brain: heard "${text}" → buffer now "${this.answerBuffer}" (${wordCount(this.answerBuffer)}w)`);
 
       // Start speculative generation once we have enough words
       if (
         !COMEDIAN_CONFIG.skipPreGeneration &&
         this.state === "wait_answer" &&
-        wordCount(this.answerBuffer) >= COMEDIAN_CONFIG.speculativeMinWords
+        wordCount(this.answerBuffer) >= COMEDIAN_CONFIG.speculativeMinWords &&
+        shouldStartSpeculative(this.answerBuffer)
       ) {
         this._transition("pre_generate");
         this._startSpeculative();
       }
 
-      // Transcript-based early endpointing: if the buffer looks like a complete thought
-      // AND we have 3+ words, complete immediately instead of waiting for VAD silence timeout.
-      // Saves ~100-200ms on clean sentence endings.
-      if (finished && wordCount(this.answerBuffer) >= 3 && ComedianBrain._looksComplete(this.answerBuffer)) {
+      // Transcript-based early endpointing: complete immediately when the final transcript
+      // looks like a complete thought OR a viable short answer (name/yes-no/number).
+      if (
+        finished &&
+        (
+          (wordCount(this.answerBuffer) >= 3 && ComedianBrain._looksComplete(this.answerBuffer)) ||
+          this._isViableAnswer(this.answerBuffer)
+        )
+      ) {
         this.deps.logTiming(`brain: early endpoint — transcript looks complete "${this.answerBuffer.slice(-30)}"`);
         this._clearTimers();
         this._onAnswerComplete();
@@ -478,6 +585,86 @@ export class ComedianBrain {
     if (/[.?!]\s*$/.test(trimmed)) return true;
     // Common phrase terminals
     if (/\b(I guess|you know|I dunno|that's it|yeah|nope|no|yes)\s*$/i.test(trimmed)) return true;
+    return false;
+  }
+
+  /** Heuristic: is this a plausible complete answer for the current question? */
+  private _isViableAnswer(answer: string): boolean {
+    const trimmed = answer.trim();
+    if (!trimmed) return false;
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    if (words.length >= 3) return true;
+
+    const normalized = normalizeAnswerToken(trimmed.toLowerCase());
+    const qId = this.currentQuestion?.id ?? "";
+
+    if (qId === "name") {
+      // Single-word names are common; avoid accepting one-letter fragments.
+      return normalized.length >= 2;
+    }
+    if (qId === "age") {
+      return /\b\d{1,3}\b/.test(trimmed);
+    }
+    if (qId === "single") {
+      return /^(yes|yeah|yep|yup|no|nah|nope|single|married|divorced|taken|it's complicated)\b/i.test(trimmed);
+    }
+    // Generic short-but-valid responses ("dentist", "Seattle", "teacher")
+    return words.length >= 2 || normalized.length >= 4;
+  }
+
+  /** Short confirmation chatter that often trails a just-confirmed answer. */
+  private static _isAffirmationTail(text: string): boolean {
+    const t = text.trim().toLowerCase();
+    if (!t) return false;
+    return /^(,?\s*)?(yeah|yes|yep|yup|right|correct|exactly|that's right|that is right|uh huh|mhm|mm-hm)\b/.test(t);
+  }
+
+  /** Explicit correction cues that should override similarity checks. */
+  private static _hasCorrectionCue(text: string): boolean {
+    const t = text.trim().toLowerCase();
+    if (!t) return false;
+    return /^(no|nah|nope|wrong)\b/.test(t) || /\b(i said|that's not|that is not|not that)\b/.test(t);
+  }
+
+  /** Normalize for substring match between STT and recent puppet lines. */
+  private static _normalizeForEchoMatch(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s']/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /**
+   * STT often returns the puppet's roast punchline (e.g. "you poor bastard") instead of the user's words.
+   * If the transcript is a contiguous substring of a joke we just told, reject — don't confirm or roast it as fact.
+   */
+  private _answerEchoesRecentRoast(answer: string): boolean {
+    const a = ComedianBrain._normalizeForEchoMatch(answer);
+    if (a.length < 5) return false;
+    if (wordCount(answer) > 10) return false;
+
+    const sources: string[] = [];
+    if (this.lastDeliveredJokeText) sources.push(this.lastDeliveredJokeText);
+    for (const e of this.ledger) {
+      if (e.type === "joke") sources.push(e.text);
+    }
+
+    const dedup: string[] = [];
+    const seen = new Set<string>();
+    for (const t of sources) {
+      const key = t.slice(0, 120);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedup.push(t);
+    }
+
+    for (const raw of dedup.slice(-5)) {
+      const src = ComedianBrain._normalizeForEchoMatch(raw);
+      if (src.length < 12) continue;
+      if (src.includes(a)) return true;
+    }
+
     return false;
   }
 
@@ -687,6 +874,7 @@ export class ComedianBrain {
 
     // Determine which question to ask
     let question: ComedyQuestion | null = null;
+    let shouldListenImmediately = false;
 
     if (this.pendingFollowUp && !sameQuestion && this.followUpCount < 1) {
       // Ask generated follow-up (max 1 per topic, then move on)
@@ -727,13 +915,14 @@ export class ComedianBrain {
       this.askedQuestionIds.add(question.id);
       this.currentQuestion = question;
       if (wasReady) {
-        // Rephrase finished and TTS is already in the chain — gapless
-        this.deps.logTiming("brain: using pre-queued question (zero wait)");
-        // If queue already drained (question played during prior states), advance now
         if (this.deps.isQueueEmpty()) {
-          this.deps.logTiming("brain: pre-queued question already drained — advancing to wait_answer");
-          this.enterWaitAnswer();
-          return;
+          // Pre-queued question already drained. Don't re-queue (causes audible duplicates);
+          // move directly into listening since the question was already spoken.
+          this.deps.logTiming("brain: pre-queued question already drained — entering wait_answer");
+          shouldListenImmediately = true;
+        } else {
+          // TTS is still in the chain — gapless
+          this.deps.logTiming("brain: using pre-queued question (zero wait)");
         }
       } else {
         // Rephrase didn't finish in time — fall back to original text immediately
@@ -770,17 +959,25 @@ export class ComedianBrain {
 
     this.deps.setCurrentQuestion(this.currentQuestion.question);
     this._addLedger("question", this.currentQuestion.question, []);
+    if (shouldListenImmediately) {
+      this.enterWaitAnswer();
+    }
   }
 
   private enterWaitAnswer(): void {
     this._transition("wait_answer");
     this.deps.setMotion("listening", 0.5);
     this.fillerFiredForAnswer = false;
+    this.sttHadFinalSegment = false;
 
     // If user already spoke during ask_question, start silence timer (not prod timer)
     if (this.answerBuffer.trim()) {
       this.deps.logTiming(`brain: wait_answer with pre-buffered answer — "${this.answerBuffer}"`);
-      if (!COMEDIAN_CONFIG.skipPreGeneration && wordCount(this.answerBuffer) >= COMEDIAN_CONFIG.speculativeMinWords) {
+      if (
+        !COMEDIAN_CONFIG.skipPreGeneration &&
+        wordCount(this.answerBuffer) >= COMEDIAN_CONFIG.speculativeMinWords &&
+        shouldStartSpeculative(this.answerBuffer)
+      ) {
         this._transition("pre_generate");
         this._startSpeculative();
       }
@@ -815,11 +1012,16 @@ export class ComedianBrain {
 
   private _startAnswerSilenceTimer(): void {
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    const silenceMs = this.vadAvailable
+      ? COMEDIAN_CONFIG.answerSilenceMs
+      : this._isViableAnswer(this.answerBuffer)
+        ? COMEDIAN_CONFIG.answerSilenceMs
+        : Math.max(COMEDIAN_CONFIG.answerSilenceMs, 900);
     this.silenceTimer = setTimeout(() => {
       if (this.state === "wait_answer" || this.state === "pre_generate") {
         this._onAnswerComplete();
       }
-    }, COMEDIAN_CONFIG.answerSilenceMs);
+    }, silenceMs);
   }
 
   /** Shorter silence window used after late-transcription bounces — STT is clearly ending. */
@@ -862,10 +1064,31 @@ export class ComedianBrain {
       return;
     }
 
+    // STT often captures the puppet's last roast line (e.g. "you poor bastard" → user "Poor bastard.")
+    // Never treat that as their answer — reject and re-ask like garbage transcript.
+    if (this._answerEchoesRecentRoast(answer)) {
+      this.deps.logTiming(`brain: reject echo of recent roast — "${answer}"`);
+      this.answerBuffer = "";
+      this.deps.setUserAnswer("");
+      const line =
+        ECHO_REJECTION_TEMPLATES[Math.floor(Math.random() * ECHO_REJECTION_TEMPLATES.length)];
+      this.deps.queueSpeak(line, "conspiratorial", 0.55);
+      this._cancelSpeculative();
+      this._transition("ask_question");
+      return;
+    }
+
     // Confidence gate — reject garbage, confirm dubious, pass clean answers through
     // Skip when scripted lines are disabled (no canned confirm/reject templates)
     if (COMEDIAN_CONFIG.confirmationEnabled && !COMEDIAN_CONFIG.skipScriptedLines) {
       const qId = this.currentQuestion?.id ?? "";
+      // Name confirmations are useful for short transcripts ("Mike"/"Mark"),
+      // but long multi-word replies are usually intentional bits, not STT errors.
+      if (qId === "name" && wordCount(answer) >= 3) {
+        this.deps.logTiming(`brain: skip name confirmation for long answer — "${answer}"`);
+        this.enterGenerating(answer);
+        return;
+      }
       const confidence = transcriptConfidence(answer, qId);
       const threshold = this.currentQuestion?.confirmThreshold ?? CONFIDENCE_THRESHOLDS.defaultConfirm;
 
@@ -898,18 +1121,26 @@ export class ComedianBrain {
 
   private enterConfirmAnswer(answer: string): void {
     this._transition("confirm_answer");
-    this.pendingConfirmAnswer = answer;
+    const normalized = normalizeForConfirm(answer) || answer.trim();
+    this.pendingConfirmAnswer = normalized;
     this.confirmBuffer = "";
     this.confirmAttempts++; // 1 = first attempt; at maxConfirmAttempts, proceeds without re-confirming
     this.deps.setMotion("conspiratorial", 0.6);
 
-    // Pick a template — question-specific or default
-    const templates = this.currentQuestion?.confirmTemplates ?? DEFAULT_CONFIRM_TEMPLATES;
-    const template = templates[Math.floor(Math.random() * templates.length)];
-    const line = template.replaceAll("{answer}", answer);
+    // Echo what we think we heard, then a short absurdist “mis-hear” filler — no “did you say?”
+    // Silence after both play (confirmTimeoutMs) = implicit yes and we roast the echoed answer.
+    const templates = this.currentQuestion?.confirmTemplates ?? DEFAULT_CONFIRM_ECHO_TEMPLATES;
+    const echoTemplate = templates[Math.floor(Math.random() * templates.length)];
+    const echoAnswer = normalized.length > 140 ? `${normalized.slice(0, 137)}...` : normalized;
+    const echoLine = echoTemplate.replaceAll("{answer}", echoAnswer);
+    const tail =
+      CONFIRM_TAIL_FILLERS[Math.floor(Math.random() * CONFIRM_TAIL_FILLERS.length)];
 
-    this.deps.queueSpeak(line, "conspiratorial", 0.6);
-    this.deps.logTiming(`brain: confirm — "${line}" (attempt ${this.confirmAttempts})`);
+    this.deps.queueSpeak(echoLine, "conspiratorial", 0.65);
+    this.deps.queueSpeak(tail, "thinking", 0.55);
+    this.deps.logTiming(
+      `brain: confirm echo+t — "${echoLine.slice(0, 96)}" · "${tail}" (${this.confirmAttempts})`,
+    );
   }
 
   /** Start listening timer after confirm prompt finishes playing. */
@@ -946,7 +1177,7 @@ export class ComedianBrain {
   }
 
   private _processConfirmResponse(): void {
-    const response = this.confirmBuffer.trim();
+    const response = normalizeForConfirm(this.confirmBuffer);
     if (!response) {
       // No response heard — treat as implicit yes
       this._confirmAccepted();
@@ -965,7 +1196,9 @@ export class ComedianBrain {
         // Extract corrected answer — strip leading negation
         const corrected = response.replace(/^(no+|nah|nope|wrong)[,.]?\s*/i, "").trim();
         // Strip common filler phrases before the actual answer
-        const cleaned = corrected.replace(/^(it's|its|it is|i said|my name is|i'm|im|actually)\s+/i, "").trim();
+        const cleaned = normalizeForConfirm(
+          corrected.replace(/^(it's|its|it is|i said|my name is|i'm|im|actually)\s+/i, "").trim()
+        );
         if (!cleaned) {
           // They said "no" with filler but no actual correction — treat as bare deny
           this._confirmDenied();
@@ -988,6 +1221,13 @@ export class ComedianBrain {
         break;
 
       case "restate":
+        // Streaming STT often arrives in fragments (", I love my" -> "name.").
+        // If this still looks partial, wait for more chunks instead of re-confirming.
+        if (!/[.?!]\s*$/.test(this.confirmBuffer.trim()) && wordCount(response) < 4) {
+          this.deps.logTiming(`brain: confirm response looks partial — waiting for more ("${response}")`);
+          this._startConfirmSilenceTimer();
+          break;
+        }
         // User restated their answer without saying no — treat as a new answer
         if (this.confirmAttempts >= COMEDIAN_CONFIG.maxConfirmAttempts) {
           this.deps.logTiming(`brain: max confirm attempts — proceeding with restatement "${response}"`);
@@ -1326,7 +1566,6 @@ export class ComedianBrain {
         }
         if (prefetch.meta?.followUp) this.pendingFollowUp = prefetch.meta.followUp;
         if (prefetch.meta?.tags?.length) this._addLedger("answer", answer, prefetch.meta.tags);
-        this._preQueueNextQuestion();
         return;
       } else {
         // Jokes were already eagerly queued from the prefetch callback — TTS was in the chain.
@@ -1384,8 +1623,6 @@ export class ComedianBrain {
         }
         if (meta.followUp) this.pendingFollowUp = meta.followUp;
         if (meta.tags?.length) this._addLedger("answer", answer, meta.tags);
-        // This is the last pipeline joke — pre-queue next question for gapless transition
-        this._preQueueNextQuestion();
       },
       () => {
         if (this.deliveryGeneration !== gen) return;
@@ -1413,7 +1650,7 @@ export class ComedianBrain {
   }
 
   /** Queue question with LLM rephrase for natural variation.
-   *  Races rephrase vs 1.5s timeout — falls back to original + bridge if slow. */
+   *  Races rephrase vs ~2.8s timeout — falls back to original + bridge if slow. */
   private _queueQuestionWithBridge(questionText: string): void {
     this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
 
@@ -1439,7 +1676,7 @@ export class ComedianBrain {
       .then((d: { rephrased?: string }) => d.rephrased?.trim() || null)
       .catch(() => null);
 
-    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500));
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2800));
 
     Promise.race([rephrasePromise, timeoutPromise]).then((rephrased) => {
       // Guard: only queue if we're in ask_question (normal path) or the pre-queue is
@@ -1515,42 +1752,6 @@ export class ComedianBrain {
       });
   }
 
-  /** Pre-queue the next question's TTS while the current joke is still playing.
-   *  Calls queueSpeak immediately so TTS is already streaming when the joke finishes — no gap. */
-  private _preQueueNextQuestion(): void {
-    if (this.visionOnlyMode) return;
-
-    // If there's a follow-up, pre-queue it directly — no LLM call needed
-    if (this.pendingFollowUp) {
-      const followUpText = this.pendingFollowUp;
-      // Clear now so enterAskQuestion uses the preQueuedQuestion path (not pendingFollowUp, which double-queues)
-      this.pendingFollowUp = null;
-      this.followUpCount++;
-      this.preQueuedQuestion = {
-        id: "follow_up",
-        question: followUpText,
-        jokeContext: "Answer-driven follow-up question.",
-        prodLines: [
-          "I'm waiting. The audience is waiting.",
-          "Hello? Anyone home?",
-        ],
-      };
-      this.preQueuedTextReady = true;
-      this._queueQuestionWithBridge(followUpText);
-      this.deps.logTiming(`brain: pre-queued follow-up: "${followUpText.slice(0, 40)}"`);
-      return;
-    }
-
-    const q = this._nextValidQuestion();
-    if (!q) return; // bank exhausted — contextual question will be generated in enterAskQuestion
-
-    this.preQueuedQuestion = q;
-    this.preQueuedTextReady = true;
-    const text = this._pickQuestionText(q);
-    this._queueQuestionWithBridge(text);
-    this.deps.logTiming(`brain: pre-queued question: "${text.slice(0, 40)}"`);
-  }
-
   private _cancelRephrase(): void {
     if (this.rephraseAbort) {
       this.rephraseAbort.abort();
@@ -1564,9 +1765,10 @@ export class ComedianBrain {
   private _prefetchPipelineJoke(): void {
     if (!COMEDIAN_CONFIG.singleJokeMode || !this.pipelineAnswer) return;
     const maxJokes = COMEDIAN_CONFIG.jokesPerAnswer.max;
-    // If this is the last pipeline joke, pre-queue next question TTS for gapless transition
+    // If this is the last pipeline joke, do not pre-queue the next question yet.
+    // We still need to pass through check_vision/vision_react first; speaking a question
+    // early causes users to answer while the brain isn't listening yet.
     if (this.pipelineJokesDelivered + 1 >= maxJokes) {
-      this._preQueueNextQuestion();
       return;
     }
 
@@ -1617,8 +1819,6 @@ export class ComedianBrain {
         }
         if (prefetch.meta?.followUp) this.pendingFollowUp = prefetch.meta.followUp;
         if (prefetch.meta?.tags?.length) this._addLedger("answer", answer, prefetch.meta.tags);
-        // Pre-queue next question TTS for gapless transition after this joke
-        this._preQueueNextQuestion();
         // Mark as consumed so _pipelineNextJoke skips straight to _onDeliveringDrained
         prefetch.jokes = [];
         this.deps.logTiming("brain: pipeline joke queued eagerly (TTS prefetch started)");
@@ -1914,6 +2114,57 @@ export class ComedianBrain {
     return [...new Set(facts)]; // dedupe
   }
 
+  /**
+   * When prior jokes already echoed geo/time/weather, drop the generic AMBIENT boilerplate on the API
+   * side and inject a strict instruction instead — stops "Monday afternoon in Woodacre in the drizzle" every line.
+   */
+  private _ambientAntiRepeatNote(): string | undefined {
+    const ac = this.deps.getAmbientContext();
+    if (!ac || ac.city === "unknown") return undefined;
+
+    const jokeTexts = this.ledger
+      .filter((e) => e.type === "joke")
+      .map((e) => e.text.toLowerCase());
+    if (jokeTexts.length === 0) return undefined;
+
+    const combined = jokeTexts.join("\n");
+
+    const cityLc = ac.city.trim().toLowerCase();
+    const usedCity = cityLc.length >= 2 && combined.includes(cityLc);
+
+    const weekdayLc = new Date().toLocaleDateString("en-US", { weekday: "long" }).toLowerCase();
+    const usedWeekday = combined.includes(weekdayLc);
+
+    const todLc = ac.timeOfDay.toLowerCase();
+    const todHits = ["morning", "afternoon", "evening", "night"].filter(
+      (w) => todLc.includes(w) && combined.includes(w),
+    );
+
+    let usedWeather = false;
+    if (ac.weather) {
+      const w = ac.weather.toLowerCase();
+      const stems = ["drizzl", "rain", "rainy", "storm", "snow", "fog", "wind", "cloud", "overcast", "clear"];
+      usedWeather = stems.some((stem) => w.includes(stem) && combined.includes(stem));
+      const words = w.split(/[\s,]+/).filter((x) => x.length >= 4);
+      usedWeather ||= words.some((word) => combined.includes(word.toLowerCase()));
+    }
+
+    if (!usedCity && !usedWeekday && todHits.length === 0 && !usedWeather) return undefined;
+
+    const bits: string[] = [];
+    if (usedCity) bits.push(`place (“${ac.city}”)`);
+    if (usedWeekday) bits.push(`weekday (${weekdayLc})`);
+    if (todHits.length > 0) bits.push(`time-of-day (${todHits.join(", ")})`);
+    if (usedWeather) bits.push("weather vibe");
+
+    return (
+      `AMBIENT DISCIPLINE (mandatory): Earlier [joke] lines already referenced ${bits.join(", ")}. ` +
+        `Do NOT repeat the scenic stack (town + weekday + weather/time) as filler. ` +
+        `Do NOT reopen with "${weekdayLc} afternoon in ${ac.city}" style setups — they've been burned. ` +
+        `Roast the USER'S ANSWER or riff without restating geography unless ONE word is the punchline itself.`
+    );
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
   private _transition(next: BrainState): void {
@@ -1976,6 +2227,9 @@ export class ComedianBrain {
         persona: this.deps.getPersona(),
         burnIntensity: this.deps.getBurnIntensity(),
         contentMode: this.deps.getContentMode(),
+        ambientContext: this.deps.getAmbientContext() ?? undefined,
+        ambientAntiRepeatNote: this._ambientAntiRepeatNote(),
+        townFlavor: this.deps.getTownFlavor()?.trim() || undefined,
       }),
     })
       .then(async (resp) => {
@@ -1990,9 +2244,47 @@ export class ComedianBrain {
           return;
         }
 
+        let metaSeen = false;
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+
+        const handleEvent = (event: { type: string; [key: string]: unknown }): boolean => {
+          if (event.type === "joke") {
+            onJoke(event as unknown as JokeItem);
+          } else if (event.type === "error" && event.error === "quota_exceeded") {
+            const provider = (event.provider as string) ?? "unknown";
+            this.deps.setError?.(`${provider} credits exhausted — add billing or switch models`);
+            this.deps.logTiming(`brain: QUOTA ERROR from ${provider} (stream)`);
+            onError();
+            return true;
+          } else if (event.type === "meta") {
+            metaSeen = true;
+            onMeta(
+              event as unknown as {
+                relevant: boolean;
+                followUp?: string;
+                redirect?: string;
+                tags?: string[];
+                callback?: { text: string; motion: string; intensity: number };
+              },
+            );
+          }
+          return false;
+        };
+
+        const parseLines = (lines: string[]): boolean => {
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const event = JSON.parse(line.slice(6)) as { type: string; [key: string]: unknown };
+              if (handleEvent(event)) return true;
+            } catch {
+              // malformed SSE line
+            }
+          }
+          return false;
+        };
 
         // eslint-disable-next-line no-constant-condition
         while (true) {
@@ -2001,41 +2293,16 @@ export class ComedianBrain {
 
           buffer += decoder.decode(value, { stream: true });
 
-          // Process complete SSE lines
           const lines = buffer.split("\n");
-          buffer = lines.pop() ?? ""; // retain incomplete last line
+          buffer = lines.pop() ?? "";
+          if (parseLines(lines)) return;
+        }
 
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            try {
-              const event = JSON.parse(line.slice(6)) as {
-                type: string;
-                [key: string]: unknown;
-              };
-              if (event.type === "joke") {
-                onJoke(event as unknown as JokeItem);
-              } else if (event.type === "error" && event.error === "quota_exceeded") {
-                const provider = (event.provider as string) ?? "unknown";
-                this.deps.setError?.(`${provider} credits exhausted — add billing or switch models`);
-                this.deps.logTiming(`brain: QUOTA ERROR from ${provider} (stream)`);
-                onError();
-                return;
-              } else if (event.type === "meta") {
-                onMeta(
-                  event as unknown as {
-                    relevant: boolean;
-                    followUp?: string;
-                    redirect?: string;
-                    tags?: string[];
-                    callback?: { text: string; motion: string; intensity: number };
-                  },
-                );
-              }
-              // audio/tts_inline/audio_done events ignored — TTS handled by queueSpeak
-            } catch {
-              // malformed SSE line
-            }
-          }
+        if (buffer.trim() && parseLines(buffer.split("\n"))) return;
+
+        if (!metaSeen) {
+          this.deps.logTiming("brain: generate-speak stream ended without meta — synthesizing");
+          onMeta({ relevant: true });
         }
       })
       .catch((e) => {
@@ -2077,6 +2344,8 @@ export class ComedianBrain {
           contentMode: this.deps.getContentMode(),
           setting: this.deps.getVisionSetting(),
           ambientContext: this.deps.getAmbientContext() ?? undefined,
+          ambientAntiRepeatNote: this._ambientAntiRepeatNote(),
+          townFlavor: this.deps.getTownFlavor()?.trim() || undefined,
         }),
         signal,
       });

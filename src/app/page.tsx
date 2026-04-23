@@ -15,6 +15,10 @@ import SessionController from "@/components/session/SessionController";
 import LiveSessionController from "@/components/session/LiveSessionController";
 import { useCompositor } from "@/components/recording/useCompositor";
 import { PERSONA_IDS, PERSONAS } from "@/lib/personas";
+import { kickTownFlavorFetch } from "@/lib/kickTownFlavorFetch";
+import { prefetchParallelVisionAndGreeting } from "@/lib/greetingPrefetch";
+import { captureSquareJpegFromStream } from "@/lib/captureSquareJpegFromStream";
+import type { JokeResponse } from "@/app/api/generate-joke/route";
 import RigEditMode from "@/engine/ui/RigEditMode";
 import { useRigEditStore } from "@/engine/store/RigEditStore";
 
@@ -53,8 +57,10 @@ function MainApp() {
   const [visionElapsedSecs, setVisionElapsedSecs] = useState<number | null>(null);
 
   const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
-  // Pre-fetched Live API token — started in parallel with camera permissions to cut TTFS
+  // Pre-fetched Live API token — may start on idle (conversation) so connect is faster after permission
   const tokenPromiseRef = useRef<Promise<string> | null>(null);
+  /** Vision analyze + greeting joke — starts as soon as we have a MediaStream, before phase is roasting */
+  const warmupGreetingPromiseRef = useRef<Promise<JokeResponse | null> | null>(null);
 
   const webcamRef = useRef<WebcamCaptureHandle>(null);
   const audioPlayerRef = useRef<AudioPlayerHandle>(null);
@@ -67,6 +73,46 @@ function MainApp() {
 
   // Keep mockModeRef in sync for stale-closure-safe reads in effects
   useEffect(() => { mockModeRef.current = mockMode; }, [mockMode]);
+
+  /** Gemini Live ephemeral token (~5 min TTL); safe to prefetch on idle before the user taps Roast. */
+  function ensureLiveTokenPrefetch(): void {
+    if (sessionMode !== "conversation" || mockModeRef.current) return;
+    if (tokenPromiseRef.current) return;
+    const { burnIntensity: bi, activePersona: ap } = useSessionStore.getState();
+    tokenPromiseRef.current = fetch("/api/live-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ burnIntensity: bi, persona: ap }),
+    })
+      .then((r) => r.json())
+      .then((d: { token?: string }) => {
+        if (!d.token) throw new Error("No token in response");
+        logTiming("prefetch: token ready");
+        return d.token;
+      })
+      .catch((e) => {
+        console.warn("[token-prefetch] failed:", e);
+        tokenPromiseRef.current = null;
+        throw e;
+      });
+  }
+
+  /** Fire parallel /api/analyze + /api/generate-joke (greeting) before we leave the permission screen */
+  function startPreRoastGreetingWarmup(stream: MediaStream): void {
+    if (sessionMode !== "conversation" || mockModeRef.current) {
+      warmupGreetingPromiseRef.current = null;
+      return;
+    }
+    warmupGreetingPromiseRef.current = (async () => {
+      const frame = await captureSquareJpegFromStream(stream);
+      const s = useSessionStore.getState();
+      return prefetchParallelVisionAndGreeting(frame, {
+        activePersona: s.activePersona,
+        burnIntensity: s.burnIntensity,
+        contentMode: s.contentMode,
+      });
+    })().catch(() => null);
+  }
 
   const handleStartSession = () => { setPhase("requesting-permissions", "START_CLICKED"); };
 
@@ -130,27 +176,30 @@ function MainApp() {
       });
   }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const prevPhaseRef = useRef<typeof phase | null>(null);
+
+  // Idle: clear stale prefetch handles when returning from a session, then warm the Live token for the next run
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = phase;
+
+    if (phase !== "idle") return;
+
+    const enteredIdleFromSession = prev !== null && prev !== "idle";
+    if (enteredIdleFromSession) {
+      tokenPromiseRef.current = null;
+      warmupGreetingPromiseRef.current = null;
+    }
+    if (sessionMode === "conversation" && !mockMode) {
+      ensureLiveTokenPrefetch();
+    }
+  }, [phase, sessionMode, mockMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Request camera when phase enters requesting-permissions
   useEffect(() => {
     if (phase !== "requesting-permissions") return;
 
-    // Pre-fetch Live API token in parallel with camera permission dialog — cuts TTFS
-    // Skip in mock mode — no Gemini session will be opened
-    if (sessionMode === "conversation" && !mockModeRef.current) {
-      const { burnIntensity: bi, activePersona: ap } = useSessionStore.getState();
-      tokenPromiseRef.current = fetch("/api/live-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ burnIntensity: bi, persona: ap }),
-      })
-        .then((r) => r.json())
-        .then((d: { token?: string }) => {
-          if (!d.token) throw new Error("No token in response");
-          logTiming("prefetch: token ready");
-          return d.token;
-        })
-        .catch((e) => { console.warn("[token-prefetch] failed:", e); throw e; });
-    }
+    ensureLiveTokenPrefetch();
 
     // If camera was already granted during consent screen, just add audio and go
     if (webcamStream) {
@@ -158,9 +207,13 @@ function MainApp() {
         navigator.mediaDevices.getUserMedia({ audio: true })
           .then((audioStream) => {
             audioStream.getAudioTracks().forEach((t) => webcamStream.addTrack(t));
+            startPreRoastGreetingWarmup(webcamStream);
             setPhase("roasting", "PERMISSIONS_GRANTED");
           })
-          .catch(() => setPhase("roasting", "PERMISSIONS_GRANTED")); // proceed without mic if audio denied
+          .catch(() => {
+            startPreRoastGreetingWarmup(webcamStream);
+            setPhase("roasting", "PERMISSIONS_GRANTED");
+          }); // proceed without mic if audio denied
       } else {
         setPhase("roasting", "PERMISSIONS_GRANTED");
       }
@@ -175,6 +228,7 @@ function MainApp() {
       })
       .then((stream) => {
         setWebcamStream(stream);
+        startPreRoastGreetingWarmup(stream);
         setPhase("roasting", "PERMISSIONS_GRANTED");
       })
       .catch((err) => {
@@ -184,12 +238,16 @@ function MainApp() {
       });
   }, [phase, sessionMode, webcamStream, setPhase, setError]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Request geolocation + ambient context when session starts (if user opted in)
+  const locationConsent = useSessionStore((s) => s.locationConsent);
+
+  // Geolocation + ambient context as soon as the user opts in (landing / consent) — before the roast begins
   useEffect(() => {
-    if (phase !== "roasting") return;
-    const { locationConsent } = useSessionStore.getState();
-    if (!locationConsent) return;
+    if (phase !== "idle" && phase !== "consent" && phase !== "requesting-permissions" && phase !== "roasting")
+      return;
+    const { locationConsent: locOk, ambientContext } = useSessionStore.getState();
+    if (!locOk) return;
     if (!navigator.geolocation) return;
+    if (ambientContext?.city && ambientContext.city !== "unknown") return;
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -206,6 +264,7 @@ function MainApp() {
             if (ctx.city) {
               useSessionStore.getState().setAmbientContext(ctx);
               logTiming(`geo: ambient context ready — ${ctx.city}, ${ctx.timeOfDay}, ${ctx.weather ?? "no weather"}`);
+              kickTownFlavorFetch();
             }
           })
           .catch(() => logTiming("geo: ambient-context fetch failed"));
@@ -213,7 +272,7 @@ function MainApp() {
       () => logTiming("geo: permission denied or unavailable"),
       { timeout: 10000, maximumAge: 300000 },
     );
-  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [phase, locationConsent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wire webcam video element ref once stream is ready
   useEffect(() => {
@@ -242,10 +301,8 @@ function MainApp() {
     if (phase === "roasting") {
       const now = Date.now();
       setSessionStartTs(now);
-      useSessionStore.getState().clearTimingLog();
-      useSessionStore.getState().clearTranscriptHistory();
-      useSessionStore.getState().clearConversationEvents();
-      useSessionStore.getState().clearTimelineSpans();
+      // NOTE: Do NOT clearTimingLog() here — startLiveSession() already logged
+      // prefetch entries before this effect runs. Clearing would wipe them.
       logTiming("session: roasting started");
     }
     if (phase === "stopped" || phase === "sharing") {
@@ -367,6 +424,7 @@ function MainApp() {
           videoRecorderRef={videoRecorderRef}
           compositorStream={compositorHandle.current.stream}
           prefetchedTokenPromise={tokenPromiseRef.current}
+          warmupGreetingPrefetch={warmupGreetingPromiseRef.current}
           mockMode={mockMode}
         />
       )}

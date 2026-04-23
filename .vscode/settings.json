@@ -1,0 +1,8 @@
+{
+    "claudeCode.environmentVariables": [
+      "CLAUDE_CONFIG_DIR=C:\\Users\\tyler\\.claude"
+    ],
+    "terminal.integrated.env.windows": {
+      "CLAUDE_CONFIG_DIR": "C:\\Users\\tyler\\.claude"
+    }
+}

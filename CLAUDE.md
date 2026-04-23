@@ -37,12 +37,12 @@
 | Constant | Model ID | Used For |
 |----------|----------|----------|
 | `VISION_MODEL` | `gemini-2.5-flash` | Webcam frame analysis (`/api/vision`, `/api/analyze`) |
-| `ROAST_MODEL` | `gemini-2.5-flash` | Joke generation (`/api/generate-joke`, `/api/roast`, `/api/analyze`) |
+| `ROAST_MODEL` | `claude-sonnet-4-6` | Default joke generation model (`/api/generate-joke`, `/api/generate-speak`, `/api/generate-question`, `/api/rephrase-question`) |
 | `ELEVENLABS_VOICE_ID` | `EXAVITQu4vr4xnSDxMaL` | TTS default voice — Rachel |
 | `LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | Live API STT/VAD only (`/api/live-token`) |
 | `LIVE_VOICE_NAME` | `Kore` | Gemini native audio voice (used in session config) |
 
-> `@anthropic-ai/sdk` is installed (^0.39.0) but no routes use it yet. Future model would be `claude-sonnet-4-6` or `claude-opus-4-6`. When adding Anthropic routes, confirm the current model IDs — they update frequently.
+> Multi-provider generation is live via `src/lib/llmClient.ts` (`gemini-*`, `gpt-*`/`o*`, `claude-*`). Keep provider-specific SDK behavior inside that adapter so routes remain provider-agnostic.
 
 Run `/package-versions` before touching any API usage.
 

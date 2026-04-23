@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import { ROAST_MODEL } from "@/lib/constants";
 import { PERSONAS, DEFAULT_PERSONA, PERSONA_IDS, type PersonaId } from "@/lib/personas";
 import type { BurnIntensity } from "@/lib/prompts";
+import { generateText } from "@/lib/llmClient";
 
 interface RephraseRequest {
   question: string;
+  model?: string;
   persona: PersonaId;
   burnIntensity: BurnIntensity;
   knownFacts?: string[];
@@ -14,10 +15,8 @@ interface RephraseRequest {
 
 export async function POST(req: NextRequest) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return NextResponse.json({ error: "No API key" }, { status: 500 });
-
     const body = (await req.json()) as RephraseRequest;
+    const model = body.model ?? ROAST_MODEL;
     const personaId: PersonaId = PERSONA_IDS.includes(body.persona) ? body.persona : DEFAULT_PERSONA;
     const persona = PERSONAS[personaId];
 
@@ -40,18 +39,15 @@ export async function POST(req: NextRequest) {
       userLines.push(`Known facts: ${body.knownFacts.join(", ")}`);
     }
 
-    const ai = new GoogleGenAI({ apiKey });
-    const result = await ai.models.generateContent({
-      model: ROAST_MODEL,
-      config: {
-        systemInstruction: systemPrompt,
-        thinkingConfig: { thinkingBudget: 0 },
-        maxOutputTokens: 80,
-      },
-      contents: [{ role: "user", parts: [{ text: userLines.join("\n") }] }],
-    });
+    const rephrased = (await generateText({
+      model,
+      systemPrompt,
+      userParts: [{ text: userLines.join("\n") }],
+      maxOutputTokens: 80,
+      // Rephrase returns plain text, not JSON.
+      forceJsonObject: false,
+    })).trim() || body.question;
 
-    const rephrased = result.text?.trim() ?? body.question;
     return NextResponse.json({ rephrased });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

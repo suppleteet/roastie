@@ -39,7 +39,7 @@ const defaults = {
   // Answer confirmation
   confirmationEnabled: true,    // confirm answers when confidence is low
   maxConfirmAttempts: 2,        // max re-confirms before proceeding with best guess
-  confirmSilenceMs: 200,        // silence timer for yes/no responses (shorter — expect brief answers)
+  confirmSilenceMs: 550,        // debounce partial STT chunks before classifying confirm responses
   confirmTimeoutMs: 3000,       // silence after confirm prompt = implicit yes
 
   // Background noise gating

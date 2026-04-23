@@ -22,15 +22,16 @@ export async function POST(req: NextRequest) {
 
     const voiceId = overrideVoiceId ?? process.env.ELEVENLABS_VOICE_ID ?? ELEVENLABS_VOICE_ID;
     const voiceSettings = overrideSettings ?? {
-      stability: 0.5,
-      similarity_boost: 0.85,
-      style: 0.4,
+      stability: 0.72,
+      similarity_boost: 0.7,
+      style: 0.2,
+      speed: 0.88,
       use_speaker_boost: true,
     };
 
-    // Use ElevenLabs REST streaming endpoint
+    // Use ElevenLabs REST streaming endpoint (latency tier 3 = optimized streaming)
     const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?optimize_streaming_latency=3`,
       {
         method: "POST",
         headers: {
@@ -51,7 +52,13 @@ export async function POST(req: NextRequest) {
 
     if (!response.ok) {
       const err = await response.text();
-      console.error("[tts] ElevenLabs error:", err);
+      console.error("[tts] ElevenLabs error:", response.status, err);
+      if (response.status === 401 || response.status === 402 || /quota|credit|billing/i.test(err)) {
+        return new Response(
+          JSON.stringify({ error: "quota_exceeded", provider: "elevenlabs", detail: err }),
+          { status: 402 }
+        );
+      }
       return new Response(JSON.stringify({ error: "TTS failed" }), { status: 500 });
     }
 

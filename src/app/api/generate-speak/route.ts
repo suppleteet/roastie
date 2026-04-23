@@ -1,11 +1,11 @@
 import { NextRequest } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import { ROAST_MODEL } from "@/lib/constants";
 import { getJokePrompt } from "@/lib/prompts";
 import { PERSONA_IDS, DEFAULT_PERSONA, type PersonaId } from "@/lib/personas";
 import type { BurnIntensity } from "@/lib/prompts";
 import type { JokeContext, JokeItem, JokeResponse } from "@/app/api/generate-joke/route";
-import { getSession, getContextInstructions } from "@/lib/chatSessionStore";
+import { getSession, getContextInstructions, sendMessageStream } from "@/lib/chatSessionStore";
+import { generateTextStream, QuotaError, type UserPart } from "@/lib/llmClient";
 
 type StreamEvent =
   | { type: "joke"; text: string; motion: string; intensity: number; score: number }
@@ -52,6 +52,7 @@ function extractNewJokes(accumulated: string, emittedCount: number): JokeItem[] 
 export interface GenerateSpeakRequest {
   context: JokeContext;
   sessionId?: string;
+  model?: string;
   persona?: PersonaId;
   burnIntensity?: BurnIntensity;
   contentMode?: "clean" | "vulgar";
@@ -75,14 +76,16 @@ export interface GenerateSpeakRequest {
     tempF?: number;
     tempC?: number;
   };
+  ambientAntiRepeatNote?: string;
+  townFlavor?: string;
 }
 
 /** Build user message parts from the request body. */
 function buildUserParts(
   body: GenerateSpeakRequest,
   taskPreamble?: string,
-): Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> {
-  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+): UserPart[] {
+  const parts: UserPart[] = [];
   const contextLines: string[] = [];
 
   if (taskPreamble) contextLines.push(taskPreamble);
@@ -101,7 +104,14 @@ function buildUserParts(
     contextLines.push(`CONVERSATION SO FAR:\n${body.conversationSoFar.slice(-6).join("\n")}`);
   if (body.knownFacts?.length)
     contextLines.push(`KNOWN FACTS: ${body.knownFacts.join(", ")}`);
-  if (body.ambientContext) {
+  if (body.townFlavor?.trim()) {
+    contextLines.push(
+      `LOCAL PLACE VIBE (optional roast texture — at most one brief nod per joke; not every line): ${body.townFlavor.trim()}`,
+    );
+  }
+  if (body.ambientAntiRepeatNote) {
+    contextLines.push(body.ambientAntiRepeatNote);
+  } else if (body.ambientContext) {
     const ac = body.ambientContext;
     const dayName = new Date().toLocaleDateString("en-US", { weekday: "long" });
     contextLines.push(`AMBIENT (use sparingly): They're in ${ac.city} on a ${dayName} ${ac.timeOfDay}.${ac.weather ? ` Weather: ${ac.weather}.` : ""} NEVER say the exact time or location details.`);
@@ -119,11 +129,6 @@ function buildUserParts(
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return new Response("GEMINI_API_KEY not set", { status: 500 });
-  }
-
   let body: GenerateSpeakRequest;
   try {
     body = (await req.json()) as GenerateSpeakRequest;
@@ -131,6 +136,7 @@ export async function POST(req: NextRequest) {
     return new Response("Invalid JSON", { status: 400 });
   }
 
+  const model = body.model ?? ROAST_MODEL;
   const encoder = new TextEncoder();
 
   // Try to use an existing chat session (multi-turn — persona already loaded)
@@ -142,16 +148,13 @@ export async function POST(req: NextRequest) {
       let jokesEmitted = 0;
 
       try {
-        let geminiStream: AsyncIterable<{ text?: string | null }>;
+        let textStream: AsyncIterable<string>;
 
         if (session) {
-          // ── Multi-turn path: persona is in the chat systemInstruction ──
-          // Only send task-specific instructions + context as the user message
+          // ── Multi-turn path: persona is in the session's system prompt ──
           const taskPreamble = getContextInstructions(body.context ?? "answer_roast");
           const userParts = buildUserParts(body, taskPreamble);
-          geminiStream = await session.chat.sendMessageStream({
-            message: userParts,
-          });
+          textStream = sendMessageStream(body.sessionId!, userParts);
         } else {
           // ── Stateless fallback: full system prompt on every request ──
           const personaId: PersonaId = PERSONA_IDS.includes(body.persona as PersonaId)
@@ -166,19 +169,15 @@ export async function POST(req: NextRequest) {
           const systemPrompt = getJokePrompt(body.context ?? "answer_roast", personaId, burnIntensity, contentMode);
           const userParts = buildUserParts(body);
 
-          const ai = new GoogleGenAI({ apiKey });
-          geminiStream = await ai.models.generateContentStream({
-            model: ROAST_MODEL,
-            config: {
-              systemInstruction: systemPrompt,
-              thinkingConfig: { thinkingBudget: 0 },
-            },
-            contents: [{ role: "user", parts: userParts }],
+          textStream = generateTextStream({
+            model,
+            systemPrompt,
+            userParts,
+            forceJsonObject: true,
           });
         }
 
-        for await (const chunk of geminiStream) {
-          const chunkText = chunk.text ?? "";
+        for await (const chunkText of textStream) {
           if (!chunkText) continue;
           accumulated += chunkText;
 
@@ -220,8 +219,13 @@ export async function POST(req: NextRequest) {
           controller.enqueue(encoder.encode(sse({ type: "meta", relevant: true })));
         }
       } catch (e) {
-        console.error("[generate-speak]", e);
-        controller.enqueue(encoder.encode(sse({ type: "meta", relevant: true })));
+        if (e instanceof QuotaError) {
+          console.error("[generate-speak] QUOTA:", e.message);
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", error: "quota_exceeded", provider: e.provider, detail: e.message })}\n\n`));
+        } else {
+          console.error("[generate-speak]", e);
+          controller.enqueue(encoder.encode(sse({ type: "meta", relevant: true })));
+        }
       }
 
       controller.enqueue(encoder.encode(sse({ type: "done" })));

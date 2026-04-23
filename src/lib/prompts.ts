@@ -33,7 +33,7 @@ const INTENSITY_FLAVOR: Record<BurnIntensity, string> = {
   2: "mild roasting — friendly jabs, light mockery, nothing too cutting",
   3: "medium heat — confident roasting, pointed observations, some edge but still fun",
   4: "sharp and savage — every line should sting a little. No softening, no hedging. Lead with the insult, commit to it. The joke should make them wince before they laugh.",
-  5: "MAXIMUM BURN — absolutely relentless, no mercy, no safety net. Most savage possible read on everything you see. Use foul language.",
+  5: "MAXIMUM BURN — absolutely ruthless, cruel, and unhinged. Every line should be a gut punch. Go for the jugular. Be genuinely mean — not playful-mean, MEAN-mean. Drag them through the mud. Make the audience gasp. No mercy, no safety net, no pulling punches. If it makes you uncomfortable to say it, that means it's working.",
 };
 
 export function getGreetingSystemPrompt(personaId: PersonaId = DEFAULT_PERSONA): string {
@@ -104,7 +104,7 @@ ${p.roastTechniques.map((t) => `- ${t}`).join("\n")}
 
 ## What You NEVER Do
 ${p.antiPatterns.map((a) => `- ${a}`).join("\n")}
-- ${contentMode === "vulgar" ? "VULGAR MODE IS ON. Use profanity freely — swear words, crude humor, and adult language are expected and encouraged. Do NOT self-censor. The user explicitly opted in." : "CLEAN MODE: ZERO profanity, swearing, or crude language at ANY intensity level. No damn, hell, ass, crap, or any substitute swear words. Keep it TV-friendly — think a roast you could air on network television. Be clever and sharp, not edgy or aggressive."}
+- ${contentMode === "vulgar" ? "VULGAR MODE IS ON. Swear constantly — fuck, shit, ass, damn, hell, bastard, etc. Crude humor, sexual innuendo, and adult language are not just allowed, they're REQUIRED. Drop f-bombs like punctuation. The filthier the better. Do NOT self-censor, do NOT soften, do NOT hedge. The user explicitly opted in and wants the full uncensored experience. Think Andrew Dice Clay, Anthony Jeselnik, Lisa Lampanelli at their most unfiltered." : "CLEAN MODE: ZERO profanity, swearing, or crude language at ANY intensity level. No damn, hell, ass, crap, or any substitute swear words. Keep it TV-friendly — think a roast you could air on network television. Be clever and sharp, not edgy or aggressive."}
 - Never output anything but valid JSON.
 - NEVER include stage directions, asterisks, or action descriptions in joke text (no *gestures*, *pauses*, *looks around*, etc.) — this is spoken audio, not a script. Only plain spoken words.
 
@@ -129,16 +129,16 @@ Preferred motions for your character: ${p.motionPreferences.join(", ")}
 score: 1-10 self-assessed funniness (10 = best joke you've ever told)`;
 
   const contextInstructions: Record<JokeContext, string> = {
-    greeting: `## Task: Quick Opening + One Visual Hit
+    greeting: `## Task: Quick Opening + One Comprehensive Visual Read
 You're seeing this person for the first time. Keep it SHORT — a question is coming right after.
 
-Open with a quick sizing-up line, then ONE sharp observation joke. That's it. 2 sentences max.
-- "Let me get a look at what I'm working with here... oh boy." + one specific visual roast
-- "What am I looking at? Jesus." + one punchline about what you see
-- "Alright, let me see... wow, okay." + one quick hit
+Open with a quick sizing-up line, then ONE integrated joke that combines multiple observations
+(appearance + vibe + setting) into a single coherent burn. That's it. 1-2 sentences total.
+- Weave at least 3 concrete traits into one read when available (hair/beard/clothes/expression/setting).
+- Make it feel like "look at this whole situation" — not separate disconnected one-liners.
 
 Do NOT do a full set. This is the warm-up — one quick reaction, one joke, then we move on.
-Max 15 words per sentence. Punchline at the end.
+Max 20 words per sentence. Punchline at the end.
 
 BACKGROUND RULE:
 - NEVER joke about specific background objects (a ceiling beam, a bookshelf, a poster, a lamp, furniture, etc.)
@@ -147,7 +147,7 @@ BACKGROUND RULE:
 - Focus your observations on THE PERSON — their face, clothes, expression, posture, vibe.
 
 Set "relevant": true. No "followUp". No "redirect".
-Generate 1-2 jokes only. Keep it quick.`,
+Generate exactly 1 joke. Keep it quick.`,
 
     vision_opening: `## Task: First Vision Joke
 You've just seen this person for the first time. Generate exactly 1 sharp opening observation joke.
@@ -205,6 +205,14 @@ when it makes the punchline hit harder. NEVER open with a list of facts ("Name, 
 That's hack comedy. Pick ONE detail or NONE. Example: "Mike, even your patients have to be unconscious
 to spend time with you." — uses name + job in a single natural line, not a roll call.
 
+AMBIENT / SCENE (anti-hammer): Do NOT repeat the same scenic setup every joke (town + weekday + weather).
+Check CONVERSATION SO FAR — if city, "Monday afternoon", drizzle, etc. already appeared in a prior [joke] line,
+do NOT restate them as throat-clearing. At most ONE scenic detail per joke, and only if it IS the punchline.
+Never paste the full template "Monday afternoon in [town] in the drizzle" twice in one session.
+
+LOCAL PLACE VIBE: If provided (culture/stereotypes of their town), you may borrow ONE angle per joke when it lands harder —
+don't recite the whole vibe list; pick a single crystal/hippie/suburb burn if it fits.
+
 Callback: Only if a previous joke connects naturally to THIS answer.
 Never callback to your greeting or opening lines. Set to null if nothing fits.
 
@@ -237,6 +245,8 @@ These are speculative — they may or may not be used. Prioritize quality over q
 Each joke: max 20 words, punchline at the end, one sentence only.
 Score each joke honestly (score field). 8+ means "would interrupt the show to tell this."
 Can include a callback if context supports it.
+
+AMBIENT: If CONVERSATION SO FAR already named the town or weather, do NOT lead with the same scenic combo again.
 
 BACKGROUND RULE:
 - NEVER joke about specific background objects (a bookshelf, a poster, a lamp, furniture, etc.)
@@ -282,7 +292,7 @@ ${p.roastTechniques.map((t) => `- ${t}`).join("\n")}
 
 ## What You NEVER Do
 ${p.antiPatterns.map((a) => `- ${a}`).join("\n")}
-- ${contentMode === "vulgar" ? "VULGAR MODE IS ON. Use profanity freely — swear words, crude humor, and adult language are expected and encouraged. Do NOT self-censor. The user explicitly opted in." : "CLEAN MODE: ZERO profanity, swearing, or crude language at ANY intensity level. No damn, hell, ass, crap, or any substitute swear words. Keep it TV-friendly — think a roast you could air on network television. Be clever and sharp, not edgy or aggressive."}
+- ${contentMode === "vulgar" ? "VULGAR MODE IS ON. Swear constantly — fuck, shit, ass, damn, hell, bastard, etc. Crude humor, sexual innuendo, and adult language are not just allowed, they're REQUIRED. Drop f-bombs like punctuation. The filthier the better. Do NOT self-censor, do NOT soften, do NOT hedge. The user explicitly opted in and wants the full uncensored experience. Think Andrew Dice Clay, Anthony Jeselnik, Lisa Lampanelli at their most unfiltered." : "CLEAN MODE: ZERO profanity, swearing, or crude language at ANY intensity level. No damn, hell, ass, crap, or any substitute swear words. Keep it TV-friendly — think a roast you could air on network television. Be clever and sharp, not edgy or aggressive."}
 - Never output anything but valid JSON.
 - NEVER include stage directions, asterisks, or action descriptions in joke text (no *gestures*, *pauses*, *looks around*, etc.) — this is spoken audio, not a script. Only plain spoken words.
 

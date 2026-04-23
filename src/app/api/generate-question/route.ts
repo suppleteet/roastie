@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import { ROAST_MODEL } from "@/lib/constants";
 import { PERSONA_IDS, DEFAULT_PERSONA, PERSONAS, type PersonaId } from "@/lib/personas";
+import { generateText, type UserPart } from "@/lib/llmClient";
 
 interface GenerateQuestionRequest {
   persona: PersonaId;
+  model?: string;
   observations?: string[];
   setting?: string | null;
   knownFacts?: string[];
@@ -14,12 +15,8 @@ interface GenerateQuestionRequest {
 
 export async function POST(req: NextRequest) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: "GEMINI_API_KEY not set" }, { status: 500 });
-    }
-
     const body = (await req.json()) as GenerateQuestionRequest;
+    const model = body.model ?? ROAST_MODEL;
     const personaId: PersonaId = PERSONA_IDS.includes(body.persona) ? body.persona : DEFAULT_PERSONA;
     const persona = PERSONAS[personaId];
 
@@ -54,7 +51,7 @@ GOOD examples (natural, observational, easy):
 
 Return ONLY a JSON object: { "question": "the question text", "jokeContext": "hint for roasting their answer" }`;
 
-    const userParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+    const userParts: UserPart[] = [];
 
     const contextLines: string[] = [];
     if (body.observations?.length)
@@ -72,18 +69,14 @@ Return ONLY a JSON object: { "question": "the question text", "jokeContext": "hi
       userParts.push({ inlineData: { mimeType: "image/jpeg", data: body.imageBase64 } });
     }
 
-    const ai = new GoogleGenAI({ apiKey });
-    const result = await ai.models.generateContent({
-      model: ROAST_MODEL,
-      config: {
-        systemInstruction: systemPrompt,
-        thinkingConfig: { thinkingBudget: 0 },
-        maxOutputTokens: 120,
-      },
-      contents: [{ role: "user", parts: userParts }],
+    const rawText = await generateText({
+      model,
+      systemPrompt,
+      userParts,
+      maxOutputTokens: 120,
+      forceJsonObject: true,
     });
 
-    const rawText = result.text ?? "";
     const jsonMatch = rawText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return NextResponse.json({ question: "So what's going on with you?", jokeContext: "General roast." });

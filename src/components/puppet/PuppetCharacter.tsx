@@ -43,10 +43,10 @@ const NOSE_COLOR  = "#f5e560"; // light yellow
 const BROW_COLOR  = "#2a0050"; // dark purple
 
 interface Props {
-  modelUrl?: string;
+  modelUrl?: string | null;
 }
 
-export default function PuppetCharacter({ modelUrl = "/models/puppet-default.glb" }: Props) {
+export default function PuppetCharacter({ modelUrl = null }: Props) {
   const groupRef = useRef<THREE.Group>(null);
 
   const targets = useRef<SpringTargets>({ pitch: 0.65, yaw: 0, roll: 0.05, bobY: -0.03 });
@@ -64,11 +64,15 @@ export default function PuppetCharacter({ modelUrl = "/models/puppet-default.glb
 
   return (
     <group ref={groupRef}>
-      <GLBErrorBoundary fallback={<ProceduralHead />}>
-        <Suspense fallback={<ProceduralHead />}>
-          <GLBModel modelUrl={modelUrl} />
-        </Suspense>
-      </GLBErrorBoundary>
+      {modelUrl ? (
+        <GLBErrorBoundary fallback={<ProceduralHead />}>
+          <Suspense fallback={<ProceduralHead />}>
+            <GLBModel modelUrl={modelUrl} />
+          </Suspense>
+        </GLBErrorBoundary>
+      ) : (
+        <ProceduralHead />
+      )}
     </group>
   );
 }

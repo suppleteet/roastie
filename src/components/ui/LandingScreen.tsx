@@ -1,6 +1,15 @@
 "use client";
 import { useSessionStore } from "@/store/useSessionStore";
-import type { ContentMode } from "@/store/useSessionStore";
+import type { ContentMode, RoastModelId } from "@/store/useSessionStore";
+
+const IS_DEV = process.env.NODE_ENV !== "production";
+
+const MODEL_OPTIONS: { id: RoastModelId; label: string }[] = [
+  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  { id: "gpt-4o", label: "GPT-4o" },
+  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
+];
 
 export default function LandingScreen() {
   const setPhase = useSessionStore((s) => s.setPhase);
@@ -10,6 +19,8 @@ export default function LandingScreen() {
   const setContentMode = useSessionStore((s) => s.setContentMode);
   const locationConsent = useSessionStore((s) => s.locationConsent);
   const setLocationConsent = useSessionStore((s) => s.setLocationConsent);
+  const roastModel = useSessionStore((s) => s.roastModel);
+  const setRoastModel = useSessionStore((s) => s.setRoastModel);
 
   function handleStart() {
     setError(null);
@@ -22,6 +33,21 @@ export default function LandingScreen() {
         <div className="mb-6 px-5 py-3 bg-red-900/60 border border-red-500/50 rounded-xl text-red-300 text-sm max-w-sm">
           {error}
         </div>
+      )}
+
+      {/* Dev-only model selector */}
+      {IS_DEV && (
+        <select
+          value={roastModel}
+          onChange={(e) => setRoastModel(e.target.value as RoastModelId)}
+          className="mb-4 px-3 py-2 rounded-lg bg-white/10 border border-cyan-500/40 text-cyan-300 text-sm font-mono cursor-pointer outline-none hover:border-cyan-400/60"
+        >
+          {MODEL_OPTIONS.map((m) => (
+            <option key={m.id} value={m.id} className="bg-gray-900 text-white">
+              {m.label}
+            </option>
+          ))}
+        </select>
       )}
 
       {/* Location opt-in */}

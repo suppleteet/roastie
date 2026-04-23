@@ -179,6 +179,7 @@ export async function sendMessage(
     systemPrompt: session.systemPrompt,
     userParts: contextParts,
     maxOutputTokens,
+    forceJsonObject: true,
   });
 
   session.history.push({ role: "user", content: userText });
@@ -232,6 +233,7 @@ export async function* sendMessageStream(
     model: session.model,
     systemPrompt: session.systemPrompt,
     userParts: contextParts,
+    forceJsonObject: true,
   })) {
     accumulated += chunk;
     yield chunk;
@@ -258,8 +260,10 @@ export function getContextInstructions(context: JokeContext): string {
   // but without the persona/character setup (that's in the chat systemInstruction).
   const instructions: Record<JokeContext, string> = {
     greeting: `TASK: Opening greeting + first visual reaction. React to what you SEE.
-2-3 sentences: drawn-out first reaction + 1-2 sharp observation jokes.
-Set "relevant": true. No "followUp". Generate 2-3 jokes.`,
+Keep it tight: quick opener + ONE comprehensive roast line that combines multiple observed traits
+(appearance + vibe + inferred setting) into one coherent burn.
+Use at least 3 concrete observations when available.
+Set "relevant": true. No "followUp". Generate exactly 1 joke.`,
 
     vision_opening: `TASK: First vision joke. 1 sharp opening observation about what you see.
 Max 20 words, punchline at the end. Set "relevant": true. Generate exactly 1 joke.`,

@@ -12,6 +12,28 @@ import {
 
 export type ContentMode = "clean" | "vulgar";
 
+export type RoastModelId =
+  | "gemini-2.5-flash"
+  | "gpt-4o"
+  | "claude-sonnet-4-6"
+  | "claude-haiku-4-5-20251001";
+
+export interface VoiceSettings {
+  stability: number;        // 0-1
+  similarity_boost: number; // 0-1
+  style: number;            // 0-1
+  speed: number;            // 0.7-1.2 (turbo v2.5)
+  use_speaker_boost: boolean;
+}
+
+export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
+  stability: 0.72,
+  similarity_boost: 0.7,
+  style: 0.2,
+  speed: 0.88,
+  use_speaker_boost: true,
+};
+
 /** Ambient context derived from geolocation — time-of-day, weather, city. */
 export interface AmbientContext {
   city: string;
@@ -67,6 +89,7 @@ interface SessionState {
   sessionMode: SessionMode;
   burnIntensity: BurnIntensity;
   contentMode: ContentMode;
+  roastModel: RoastModelId;
   activePersona: PersonaId;
   isSpeaking: boolean;
   isListening: boolean;
@@ -83,6 +106,9 @@ interface SessionState {
   visionSetting: string | null; // best guess at user's location from background analysis
   locationConsent: boolean; // user opted in to share location
   ambientContext: AmbientContext | null; // time-of-day, weather, city from geolocation
+  /** LLM blurbs local vibe/culture for roast fodder — filled async after geo resolves. */
+  townFlavorBlurb: string | null;
+  townFlavorRequested: boolean;
   conversationEvents: ConversationEvent[];
   timeToFirstSpeechMs: number | null;
   hasSpokenThisSession: boolean;
@@ -93,6 +119,7 @@ interface SessionState {
   brainState: BrainState | null;
   currentQuestion: string | null;
   userAnswer: string;
+  voiceSettings: VoiceSettings;
   isUserLaughing: boolean; // vision-based: set when observations contain laugh keywords
   isUserSmiling: boolean;  // vision-based: set when observations contain smile keywords
   laughCount: number;       // total laugh detections this session
@@ -124,6 +151,7 @@ interface SessionState {
   setSessionMode: (mode: SessionMode) => void;
   setBurnIntensity: (intensity: BurnIntensity) => void;
   setContentMode: (mode: ContentMode) => void;
+  setRoastModel: (model: RoastModelId) => void;
   setActivePersona: (persona: PersonaId) => void;
   setIsSpeaking: (speaking: boolean) => void;
   setIsListening: (listening: boolean) => void;
@@ -140,6 +168,8 @@ interface SessionState {
   setVisionSetting: (setting: string | null) => void;
   setLocationConsent: (consent: boolean) => void;
   setAmbientContext: (ctx: AmbientContext | null) => void;
+  setTownFlavorBlurb: (text: string | null) => void;
+  setTownFlavorRequested: (requested: boolean) => void;
   addConversationEvent: (type: ConversationEvent["type"], text?: string) => void;
   clearConversationEvents: () => void;
   setTimeToFirstSpeechMs: (ms: number | null) => void;
@@ -149,6 +179,7 @@ interface SessionState {
   setBrainState: (state: BrainState | null) => void;
   setCurrentQuestion: (q: string | null) => void;
   setUserAnswer: (ans: string) => void;
+  setVoiceSettings: (settings: Partial<VoiceSettings>) => void;
   setIsUserLaughing: (laughing: boolean) => void;
   setIsUserSmiling: (smiling: boolean) => void;
   incrementLaughCount: () => void;
@@ -168,6 +199,7 @@ const initialState = {
   sessionMode: "conversation" as SessionMode,
   burnIntensity: 5 as BurnIntensity,
   contentMode: "clean" as ContentMode,
+  roastModel: "claude-sonnet-4-6" as RoastModelId,
   activePersona: DEFAULT_PERSONA,
   isSpeaking: false,
   isListening: false,
@@ -184,6 +216,8 @@ const initialState = {
   visionSetting: null as string | null,
   locationConsent: true,
   ambientContext: null as AmbientContext | null,
+  townFlavorBlurb: null as string | null,
+  townFlavorRequested: false,
   conversationEvents: [] as ConversationEvent[],
   timeToFirstSpeechMs: null as number | null,
   hasSpokenThisSession: false,
@@ -192,6 +226,7 @@ const initialState = {
   brainState: null as BrainState | null,
   currentQuestion: null as string | null,
   userAnswer: "",
+  voiceSettings: { ...DEFAULT_VOICE_SETTINGS },
   isUserLaughing: false,
   isUserSmiling: false,
   laughCount: 0,
@@ -218,6 +253,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setSessionMode: (sessionMode) => set({ sessionMode }),
   setBurnIntensity: (burnIntensity) => set({ burnIntensity }),
   setContentMode: (contentMode) => set({ contentMode }),
+  setRoastModel: (roastModel) => set({ roastModel }),
   setActivePersona: (activePersona) => set({ activePersona }),
   setIsSpeaking: (isSpeaking) => set({ isSpeaking }),
   setIsListening: (isListening) => set({ isListening }),
@@ -244,6 +280,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   setVisionSetting: (visionSetting) => set({ visionSetting }),
   setLocationConsent: (locationConsent) => set({ locationConsent }),
   setAmbientContext: (ambientContext) => set({ ambientContext }),
+  setTownFlavorBlurb: (townFlavorBlurb) => set({ townFlavorBlurb }),
+  setTownFlavorRequested: (townFlavorRequested) => set({ townFlavorRequested }),
   addConversationEvent: (type, text) =>
     set((s) => ({
       conversationEvents: [
@@ -259,6 +297,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setBrainState: (brainState) => set({ brainState }),
   setCurrentQuestion: (currentQuestion) => set({ currentQuestion }),
   setUserAnswer: (userAnswer) => set({ userAnswer }),
+  setVoiceSettings: (partial) => set((s) => ({ voiceSettings: { ...s.voiceSettings, ...partial } })),
   setIsUserLaughing: (isUserLaughing) => set({ isUserLaughing }),
   setIsUserSmiling: (isUserSmiling) => set({ isUserSmiling }),
   incrementLaughCount: () => set((s) => ({ laughCount: s.laughCount + 1 })),

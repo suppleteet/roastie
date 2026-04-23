@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { streamElTts } from "@/lib/elTtsStream";
+import { streamElTts, type ElVoiceSettings } from "@/lib/elTtsStream";
 
 /**
  * Streaming TTS endpoint using ElevenLabs WebSocket.
@@ -15,9 +15,9 @@ export async function POST(req: NextRequest) {
     return new Response("ELEVENLABS_API_KEY not set", { status: 500 });
   }
 
-  let body: { text?: string; previousText?: string };
+  let body: { text?: string; previousText?: string; voiceSettings?: Partial<ElVoiceSettings> };
   try {
-    body = (await req.json()) as { text?: string; previousText?: string };
+    body = (await req.json()) as typeof body;
   } catch {
     return new Response("Invalid JSON", { status: 400 });
   }
@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       const cleanup = streamElTts({
         text: body.text!,
         previousText: body.previousText,
+        voiceSettings: body.voiceSettings,
         onAudioChunk: (base64Pcm) => {
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ type: "audio", chunk: base64Pcm })}\n\n`),

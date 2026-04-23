@@ -47,7 +47,6 @@ function convertToMp4(inputPath: string, outputPath: string): Promise<void> {
       "-ar", "44100",         // 44.1kHz — widest audio compat (some Android devices reject 48kHz AAC)
       "-movflags", "+faststart",
       "-brand", "mp42",
-      "-minor_version", "0",
       outputPath,
     ], { shell: true });
 

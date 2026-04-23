@@ -40,9 +40,12 @@ function makeDeps(overrides?: Partial<ComedianBrainDeps>): ComedianBrainDeps {
     getPersona: vi.fn(() => "kvetch" as const),
     getBurnIntensity: vi.fn(() => 5 as 1 | 2 | 3 | 4 | 5),
     getContentMode: vi.fn(() => "vulgar" as const),
+    getRoastModel: vi.fn(() => "gemini-2.5-flash"),
+    getInputAmplitude: vi.fn(() => 0.1),
     getObservations: vi.fn(() => []),
     getVisionSetting: vi.fn(() => null),
     getAmbientContext: vi.fn(() => null),
+    getTownFlavor: vi.fn(() => null),
     getSessionId: vi.fn(() => null),
     setBrainState: vi.fn(),
     setCurrentQuestion: vi.fn(),
@@ -205,6 +208,7 @@ describe("ComedianBrain", () => {
       const brain = new ComedianBrain(deps);
       brain.start(); // → ask_question
 
+      brain.activateEarlyListen(); // gate opens once question TTS is nearly done
       brain.onInputTranscription("Tyler");
       expect(deps.setUserAnswer).toHaveBeenCalled();
       expect(deps.logTiming).toHaveBeenCalledWith(
@@ -225,6 +229,25 @@ describe("ComedianBrain", () => {
 
       // Should transition to generating
       expect(stateHistory(deps)).toContain("generating");
+    });
+
+    it("defers VAD completion until final STT when answer is 3+ words", () => {
+      vi.useFakeTimers();
+      try {
+        const deps = makeDeps();
+        const brain = new ComedianBrain(deps);
+        brain.start();
+        brain.onTtsQueueDrained(); // → wait_answer
+
+        brain.onInputTranscription("I work in accounting"); // partial / no finished flag yet
+        brain.onVadSpeechEnd();
+        expect(stateHistory(deps)).not.toContain("generating");
+
+        brain.onInputTranscription("I work in accounting downtown.", true);
+        expect(stateHistory(deps)).toContain("generating");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("does nothing when buffer is empty", () => {

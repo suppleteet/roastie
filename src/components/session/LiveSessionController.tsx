@@ -22,6 +22,9 @@ import { getLiveTranscriptionPrompt } from "@/lib/livePrompts";
 import { ComedianBrain } from "@/lib/comedianBrain";
 import type { MotionState } from "@/lib/motionStates";
 import { COMEDIAN_CONFIG } from "@/lib/comedianConfig";
+import { kickTownFlavorFetch } from "@/lib/kickTownFlavorFetch";
+import type { JokeResponse } from "@/app/api/generate-joke/route";
+import { prefetchParallelVisionAndGreeting } from "@/lib/greetingPrefetch";
 
 
 interface Props {
@@ -29,6 +32,8 @@ interface Props {
   videoRecorderRef: React.RefObject<VideoRecorderHandle | null>;
   compositorStream: MediaStream | null;
   prefetchedTokenPromise?: Promise<string> | null;
+  /** Parallel vision + greeting jokes started in page.tsx as soon as the camera stream exists (before roasting). */
+  warmupGreetingPrefetch?: Promise<JokeResponse | null> | null;
   mockMode?: boolean;
 }
 
@@ -37,6 +42,7 @@ export default function LiveSessionController({
   videoRecorderRef,
   compositorStream,
   prefetchedTokenPromise,
+  warmupGreetingPrefetch,
   mockMode = false,
 }: Props) {
   // Only subscribe to phase + pendingDebugTranscription for lifecycle/debug.
@@ -188,7 +194,11 @@ export default function LiveSessionController({
       const resp = await fetch("/api/tts-ws", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, ...(previousText ? { previousText } : {}) }),
+        body: JSON.stringify({
+          text,
+          ...(previousText ? { previousText } : {}),
+          voiceSettings: useSessionStore.getState().voiceSettings,
+        }),
       });
 
       if (!resp.ok || !resp.body || ttsGenerationRef.current !== gen) {
@@ -592,10 +602,10 @@ export default function LiveSessionController({
       });
   }
 
-  /** Fire the next vision call immediately after the previous one completes. */
+  /** Schedule next vision call after the configured interval. */
   function scheduleNextVision() {
     if (!isRunningRef.current) return;
-    visionIntervalRef.current = setTimeout(runVisionAnalyze, 0);
+    visionIntervalRef.current = setTimeout(runVisionAnalyze, COMEDIAN_CONFIG.visionIntervalMs);
   }
 
   function startVisionSend() {
@@ -748,29 +758,48 @@ export default function LiveSessionController({
     userSpeakingSpanRef.current = null;
     geminiWaitingSpanRef.current = null;
     firstSpeechRecordedRef.current = false;
+    useSessionStore.getState().setError(null); // clear any prior quota/session error
+    useSessionStore.getState().clearTimingLog();
     useSessionStore.getState().clearConversationEvents();
     useSessionStore.getState().clearTimelineSpans();
     useSessionStore.getState().clearTranscriptHistory();
+    useSessionStore.getState().setTownFlavorBlurb(null);
+    useSessionStore.getState().setTownFlavorRequested(false);
     useSessionStore.getState().logTiming("live: starting session");
 
-    // Prefetch greeting BEFORE building the brain — starts generating while Gemini Live connects.
-    // Captures webcam frame now so the greeting can reference what the model sees.
-    const greetingFrame = webcamRef.current?.captureFrame();
-    const greetingPrefetch = fetch("/api/generate-joke", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        context: "greeting",
-        persona: useSessionStore.getState().activePersona,
-        burnIntensity: useSessionStore.getState().burnIntensity,
-        contentMode: useSessionStore.getState().contentMode,
-        observations: useSessionStore.getState().observations,
-        imageBase64: greetingFrame,
-      }),
-    })
-      .then((r) => r.ok ? r.json() : null)
-      .catch(() => null) as Promise<import("@/app/api/generate-joke/route").JokeResponse | null>;
-    useSessionStore.getState().logTiming("live: greeting prefetch fired");
+    // Prefetch greeting: vision analyze first → then joke generation with observations.
+    // This lets the greeting reference what the model actually sees ("nice beard", "that shirt").
+    // Webcam startup can lag by a few hundred ms, so retry briefly before giving up.
+    const captureGreetingFrame = async (): Promise<string | undefined> => {
+      let frame = webcamRef.current?.captureFrame();
+      if (frame) return frame;
+      for (let i = 0; i < 3; i++) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 120));
+        frame = webcamRef.current?.captureFrame();
+        if (frame) {
+          useSessionStore.getState().logTiming(`live: greeting frame became ready after retry ${i + 1}`);
+          return frame;
+        }
+      }
+      return undefined;
+    };
+    let greetingPrefetch: Promise<JokeResponse | null>;
+
+    if (warmupGreetingPrefetch) {
+      greetingPrefetch = warmupGreetingPrefetch.catch(() => null);
+      useSessionStore.getState().logTiming("live: using pre-roast greeting warmup");
+    } else {
+      const greetingFrame = await captureGreetingFrame();
+      const greetingStore = useSessionStore.getState();
+      useSessionStore.getState().logTiming(`live: greeting prefetch — frame=${greetingFrame ? "yes" : "no"}`);
+
+      greetingPrefetch = prefetchParallelVisionAndGreeting(greetingFrame, {
+        activePersona: greetingStore.activePersona,
+        burnIntensity: greetingStore.burnIntensity,
+        contentMode: greetingStore.contentMode,
+      }).catch(() => null);
+      useSessionStore.getState().logTiming("live: greeting prefetch fired (parallel vision + joke)");
+    }
 
     // Build ComedianBrain
     brainRef.current = new ComedianBrain({
@@ -783,14 +812,18 @@ export default function LiveSessionController({
       getPersona: () => useSessionStore.getState().activePersona,
       getBurnIntensity: () => useSessionStore.getState().burnIntensity,
       getContentMode: () => useSessionStore.getState().contentMode,
+      getRoastModel: () => useSessionStore.getState().roastModel,
+      getInputAmplitude: () => mic.getInputAmplitude(),
       getObservations: () => useSessionStore.getState().observations,
       getVisionSetting: () => useSessionStore.getState().visionSetting,
       getAmbientContext: () => useSessionStore.getState().ambientContext,
+      getTownFlavor: () => useSessionStore.getState().townFlavorBlurb,
       getSessionId: () => comedianSessionIdRef.current,
       setBrainState: (s) => useSessionStore.getState().setBrainState(s),
       setCurrentQuestion: (q) => useSessionStore.getState().setCurrentQuestion(q),
       setUserAnswer: (a) => useSessionStore.getState().setUserAnswer(a),
       logTiming: (e) => useSessionStore.getState().logTiming(e),
+      setError: (e) => useSessionStore.getState().setError(e),
       revealSession: () => useSessionStore.getState().setHasSpokenThisSession(true),
       prefetchedGreeting: greetingPrefetch,
       saveCritique: (text, ctx) => {
@@ -824,13 +857,14 @@ export default function LiveSessionController({
           persona: store.activePersona,
           burnIntensity: store.burnIntensity,
           contentMode: store.contentMode,
+          model: store.roastModel,
         }),
       })
         .then((r) => r.json())
         .then((data: { sessionId?: string }) => {
           if (data.sessionId && isRunningRef.current) {
             comedianSessionIdRef.current = data.sessionId;
-            useSessionStore.getState().logTiming(`live: comedian chat session ready (${data.sessionId})`);
+            useSessionStore.getState().logTiming(`live: comedian chat session ready (${data.sessionId}) model=${store.roastModel}`);
           }
         })
         .catch(() => { /* stateless fallback — no action needed */ });
@@ -853,9 +887,16 @@ export default function LiveSessionController({
       // Start Silero VAD on the mic stream for fast end-of-speech detection
       const micStream = mic.getStream();
       if (micStream) {
-        vad.start(micStream).catch((e) =>
-          console.warn("[live] VAD start failed (falling back to silence timer):", e),
-        );
+        vad.start(micStream)
+          .then(() => {
+            brainRef.current?.setVadAvailable(true);
+          })
+          .catch((e) => {
+            brainRef.current?.setVadAvailable(false);
+            console.warn("[live] VAD start failed (falling back to silence timer):", e);
+          });
+      } else {
+        brainRef.current?.setVadAvailable(false);
       }
 
       kickoffTimeRef.current = Date.now();
@@ -876,6 +917,7 @@ export default function LiveSessionController({
       // Start the comedy show
       startDrainPolling();
       brainRef.current.start();
+      kickTownFlavorFetch(); // overlaps first-joke TTS when geo already resolved
       useSessionStore.getState().logTiming("live: brain started");
 
       // Send first webcam frame to Gemini for VAD context

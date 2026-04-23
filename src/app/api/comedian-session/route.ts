@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "GEMINI_API_KEY not set" }, { status: 500 });
   }
 
-  let body: { persona?: string; burnIntensity?: number; contentMode?: string };
+  let body: { persona?: string; burnIntensity?: number; contentMode?: string; model?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
     : 3;
   const contentMode = body.contentMode === "vulgar" ? "vulgar" : "clean";
 
-  const sessionId = createSession(apiKey, persona, burnIntensity, contentMode);
+  const sessionId = createSession(apiKey, persona, burnIntensity, contentMode, body.model);
 
   return NextResponse.json({ sessionId });
 }

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { useSessionStore } from "@/store/useSessionStore";
+import { useSessionStore, DEFAULT_VOICE_SETTINGS } from "@/store/useSessionStore";
+import type { VoiceSettings } from "@/store/useSessionStore";
 
 function relTime(ts: number, startTs: number | null): string {
   if (startTs === null) return "--";
@@ -32,6 +33,10 @@ export default function DebugTranscript() {
   const isUserLaughing = useSessionStore((s) => s.isUserLaughing);
   const jokeRatings = useSessionStore((s) => s.jokeRatings);
   const rateJoke = useSessionStore((s) => s.rateJoke);
+  const voiceSettings = useSessionStore((s) => s.voiceSettings);
+  const setVoiceSettings = useSessionStore((s) => s.setVoiceSettings);
+  const burnIntensity = useSessionStore((s) => s.burnIntensity);
+  const setBurnIntensity = useSessionStore((s) => s.setBurnIntensity);
 
   // Auto-scroll to bottom on new entries
   useEffect(() => {
@@ -216,6 +221,93 @@ export default function DebugTranscript() {
               </>
             )}
           </div>
+        </div>
+      )}
+      {/* Voice settings — collapsible below transcript */}
+      {expanded && (
+        <VoiceSliders
+          voiceSettings={voiceSettings}
+          setVoiceSettings={setVoiceSettings}
+          burnIntensity={burnIntensity}
+          setBurnIntensity={setBurnIntensity}
+        />
+      )}
+    </div>
+  );
+}
+
+const VOICE_SLIDERS: { key: keyof VoiceSettings; label: string; min: number; max: number; step: number }[] = [
+  { key: "stability", label: "Stability", min: 0, max: 1, step: 0.05 },
+  { key: "similarity_boost", label: "Similarity", min: 0, max: 1, step: 0.05 },
+  { key: "style", label: "Style", min: 0, max: 1, step: 0.05 },
+  { key: "speed", label: "Speed", min: 0.7, max: 1.2, step: 0.05 },
+];
+
+function VoiceSliders({ voiceSettings, setVoiceSettings, burnIntensity, setBurnIntensity }: {
+  voiceSettings: VoiceSettings;
+  setVoiceSettings: (s: Partial<VoiceSettings>) => void;
+  burnIntensity: number;
+  setBurnIntensity: (n: 1 | 2 | 3 | 4 | 5) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="w-72 bg-black/90 border border-purple-400/30 rounded overflow-hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full px-2 py-0.5 font-mono text-[10px] text-purple-300 hover:bg-purple-900/20 transition-colors text-left"
+      >
+        voice {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <div className="px-2 pb-2 space-y-1.5">
+          <label className="block">
+            <div className="flex justify-between font-mono text-[10px] text-orange-300/80">
+              <span>Burn</span>
+              <span className="text-white/40">{burnIntensity}/5</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={5}
+              step={1}
+              value={burnIntensity}
+              onChange={(e) => setBurnIntensity(parseInt(e.target.value) as 1 | 2 | 3 | 4 | 5)}
+              className="w-full h-1 accent-orange-400 cursor-pointer"
+            />
+          </label>
+          <div className="border-t border-white/10 my-1" />
+          {VOICE_SLIDERS.map(({ key, label, min, max, step }) => (
+            <label key={key} className="block">
+              <div className="flex justify-between font-mono text-[10px] text-purple-300/80">
+                <span>{label}</span>
+                <span className="text-white/40">{(voiceSettings[key] as number).toFixed(2)}</span>
+              </div>
+              <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={voiceSettings[key] as number}
+                onChange={(e) => setVoiceSettings({ [key]: parseFloat(e.target.value) })}
+                className="w-full h-1 accent-purple-400 cursor-pointer"
+              />
+            </label>
+          ))}
+          <label className="flex items-center gap-2 font-mono text-[10px] text-purple-300/80 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={voiceSettings.use_speaker_boost}
+              onChange={(e) => setVoiceSettings({ use_speaker_boost: e.target.checked })}
+              className="w-3 h-3 accent-purple-400 cursor-pointer"
+            />
+            Speaker Boost
+          </label>
+          <button
+            onClick={() => setVoiceSettings(DEFAULT_VOICE_SETTINGS)}
+            className="w-full py-0.5 font-mono text-[9px] text-white/30 hover:text-white/60 border border-white/10 hover:border-white/20 rounded transition-colors"
+          >
+            Reset defaults
+          </button>
         </div>
       )}
     </div>

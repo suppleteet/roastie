@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { getRoastSystemPrompt, getGreetingSystemPrompt } from "@/lib/prompts";
-import { ROAST_MODEL } from "@/lib/constants";
+import { VISION_MODEL } from "@/lib/constants";
 import { extractJson } from "@/lib/jsonUtils";
 import type { BurnIntensity } from "@/lib/prompts";
 
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
       : getRoastSystemPrompt(burnIntensity as BurnIntensity);
 
     const response = await ai.models.generateContent({
-      model: ROAST_MODEL,
+      model: VISION_MODEL,
       contents: [
         {
           role: "user",

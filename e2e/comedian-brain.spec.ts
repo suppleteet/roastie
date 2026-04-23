@@ -26,14 +26,14 @@ test.describe("Comedian Brain — Full Flow", () => {
     expect(elapsed).toBeLessThan(5000);
   });
 
-  test("brain transitions to greeting state on session start", async ({ page }) => {
+  test("brain visits greeting state on session start", async ({ page }) => {
     const driver = new ComedianBrainDriver(page);
     await driver.setup();
     await startRoasting(page, driver);
-
-    await driver.waitForBrainState("greeting", 5000);
-    const state = await driver.getBrainState();
-    expect(state).toBe("greeting");
+    await page.waitForFunction(() => {
+      const timing = JSON.parse(localStorage.getItem("roastie-timing-log") ?? "[]") as string[];
+      return timing.some((line) => line.includes("brain: → greeting"));
+    }, { timeout: 5000 });
   });
 
   test("HUD displays data-brain-state attribute", async ({ page }) => {

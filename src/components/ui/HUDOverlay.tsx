@@ -2,6 +2,8 @@
 import { useEffect, useRef } from "react";
 import { useSessionStore } from "@/store/useSessionStore";
 
+const ERROR_DISMISS_MS = 8000;
+
 interface Props {
   onStartSession: () => void;
   isMock?: boolean;
@@ -18,6 +20,16 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
   const brainState = useSessionStore((s) => s.brainState);
   const currentQuestion = useSessionStore((s) => s.currentQuestion);
   const userAnswer = useSessionStore((s) => s.userAnswer);
+
+  const error = useSessionStore((s) => s.error);
+  const setError = useSessionStore((s) => s.setError);
+
+  // Auto-dismiss error banner after ERROR_DISMISS_MS
+  useEffect(() => {
+    if (!error) return;
+    const id = setTimeout(() => setError(null), ERROR_DISMISS_MS);
+    return () => clearTimeout(id);
+  }, [error, setError]);
 
   const isConversation = sessionMode === "conversation";
   const isRoasting = phase === "roasting";
@@ -76,6 +88,15 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
           <p className="text-[11px] text-white/40 leading-snug truncate">
             {userAnswer}
           </p>
+        </div>
+      )}
+
+      {/* Quota / credit error banner */}
+      {isRoasting && error && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 pointer-events-none max-w-md">
+          <div className="bg-red-900/90 border border-red-500/50 rounded-lg px-4 py-2 text-center">
+            <p className="text-sm text-red-100 font-bold">{error}</p>
+          </div>
         </div>
       )}
 

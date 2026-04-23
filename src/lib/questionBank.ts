@@ -22,16 +22,29 @@ export interface ComedyQuestion {
   excludes?: string[];
   /** Confidence threshold — confirm answer if confidence is below this (0-1). Higher = confirm more often. */
   confirmThreshold?: number;
-  /** Templates for confirming the answer. {answer} is replaced with the transcription. */
+  /** Echo-only templates (misheard repeat). {answer} = transcription; brain appends a tail filler after. */
   confirmTemplates?: string[];
 }
 
-/** Default confirm templates used for questions without custom ones (including contextual questions). */
-export const DEFAULT_CONFIRM_TEMPLATES = [
-  "{answer}?",
-  "I heard {answer}. That right?",
-  "{answer} — did I get that?",
+/** Absurdist “mis-parse” beats after repeating what we think we heard — silence = roll with it. */
+export const CONFIRM_TAIL_FILLERS = [
+  "Fart? Hmm.",
+  "Part? Hmm.",
+  "Cart? Hmm.",
+  "Heart? Come on. Hmm.",
+  "Sharp? Hmm.",
 ];
+
+/** Default echo lines only — puppet repeats STT; tail filler queues next (see CONFIRM_TAIL_FILLERS). */
+export const DEFAULT_CONFIRM_ECHO_TEMPLATES = [
+  "{answer}?",
+  "So — {answer}.",
+  "{answer}.",
+  "{answer}, huh?",
+];
+
+/** @deprecated Use DEFAULT_CONFIRM_ECHO_TEMPLATES — alias for older imports */
+export const DEFAULT_CONFIRM_TEMPLATES = DEFAULT_CONFIRM_ECHO_TEMPLATES;
 
 /** Lines spoken when confidence is too low to even attempt confirmation. */
 export const REJECT_TEMPLATES = [
@@ -39,6 +52,13 @@ export const REJECT_TEMPLATES = [
   "What was that?",
   "One more time.",
   "Sorry — say that again?",
+];
+
+/** STT often grabs the puppet's punchline — user repeats it into the mic. Re-ask; don't roast it as their answer. */
+export const ECHO_REJECTION_TEMPLATES = [
+  "That's my line — I need a real answer, not the joke echoing back.",
+  "You can't just repeat what I said — give me an actual answer.",
+  "The mic picked up my voice, not yours — try again.",
 ];
 
 export const QUESTION_BANK: ComedyQuestion[] = [
@@ -60,9 +80,9 @@ export const QUESTION_BANK: ComedyQuestion[] = [
     confirmThreshold: 0.8,
     confirmTemplates: [
       "{answer}?",
-      "Wait — {answer}?",
-      "{answer}, is that right?",
-      "Did you say {answer}?",
+      "So — {answer}.",
+      "{answer}.",
+      "{answer}, huh?",
     ],
   },
   {
@@ -82,9 +102,10 @@ export const QUESTION_BANK: ComedyQuestion[] = [
     ],
     confirmThreshold: 0.5,
     confirmTemplates: [
-      "A {answer}? Really?",
-      "{answer}. That tracks.",
       "{answer}?",
+      "A {answer}?",
+      "So — {answer}.",
+      "{answer}.",
     ],
   },
   {

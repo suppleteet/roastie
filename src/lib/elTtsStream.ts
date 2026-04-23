@@ -16,6 +16,22 @@ import { ELEVENLABS_VOICE_ID } from "@/lib/constants";
 const EL_MODEL_ID = "eleven_turbo_v2_5";
 const EL_OUTPUT_FORMAT = "pcm_24000"; // 16-bit PCM at 24kHz — matches OUTPUT_SAMPLE_RATE
 
+export interface ElVoiceSettings {
+  stability: number;
+  similarity_boost: number;
+  style: number;
+  speed: number;
+  use_speaker_boost: boolean;
+}
+
+const DEFAULT_VOICE_SETTINGS: ElVoiceSettings = {
+  stability: 0.72,
+  similarity_boost: 0.7,
+  style: 0.2,
+  speed: 0.88,
+  use_speaker_boost: true,
+};
+
 interface ElTtsStreamOptions {
   /** Text to synthesize. Sent as a single chunk. */
   text: string;
@@ -29,6 +45,8 @@ interface ElTtsStreamOptions {
   onError: (err: Error) => void;
   /** ElevenLabs voice ID override. */
   voiceId?: string;
+  /** Voice settings override. */
+  voiceSettings?: Partial<ElVoiceSettings>;
 }
 
 /**
@@ -42,6 +60,7 @@ export function streamElTts({
   onDone,
   onError,
   voiceId,
+  voiceSettings: settingsOverride,
 }: ElTtsStreamOptions): () => void {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
@@ -56,18 +75,17 @@ export function streamElTts({
   let closed = false;
 
   ws.on("open", () => {
+    const { speed, ...vsRest } = { ...DEFAULT_VOICE_SETTINGS, ...settingsOverride };
     // BOS (Beginning of Stream) — init with voice settings
     ws.send(
       JSON.stringify({
         text: " ",
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.85,
-          style: 0.4,
-          use_speaker_boost: true,
-        },
+        voice_settings: vsRest,
         xi_api_key: apiKey,
-        generation_config: { chunk_length_schedule: [120, 160, 250, 290] },
+        generation_config: {
+          chunk_length_schedule: [120, 160, 250, 290],
+          ...(speed !== undefined && speed !== 1.0 ? { speed } : {}),
+        },
         ...(previousText ? { previous_text: previousText } : {}),
       }),
     );
