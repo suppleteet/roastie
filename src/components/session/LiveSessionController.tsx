@@ -37,6 +37,34 @@ interface Props {
   mockMode?: boolean;
 }
 
+class TtsChunkBuffer {
+  chunks: string[] = [];
+  done = false;
+  failed = false;
+  private waiters: Array<() => void> = [];
+
+  push(chunk: string): void {
+    this.chunks.push(chunk);
+    this.notify();
+  }
+
+  finish(failed = false): void {
+    this.failed = failed;
+    this.done = true;
+    this.notify();
+  }
+
+  waitForUpdate(): Promise<void> {
+    if (this.done) return Promise.resolve();
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  private notify(): void {
+    const waiters = this.waiters.splice(0);
+    for (const resolve of waiters) resolve();
+  }
+}
+
 export default function LiveSessionController({
   webcamRef,
   videoRecorderRef,
@@ -132,7 +160,7 @@ export default function LiveSessionController({
     useSessionStore.getState().clearPendingDebugTranscription();
     useSessionStore.getState().pushTranscriptEntry("user", text);
     useSessionStore.getState().logTiming(`debug-input: "${text}"`);
-    brainRef.current.onInputTranscription(text);
+    brainRef.current.onInputTranscription(text, true);
   }, [pendingDebugTranscription]);
 
   // Dev voice notes: consume resume signal and forward to brain
@@ -159,9 +187,9 @@ export default function LiveSessionController({
     const previousText = lastSpokenTextRef.current;
     lastSpokenTextRef.current = text.trim();
 
-    // Fire TTS fetch NOW — starts generating audio while previous joke is still playing.
-    // Chunks are buffered; playback waits for our turn in the chain.
-    const audioPromise = prefetchTts(text.trim(), gen, previousText);
+    // Fire TTS fetch NOW; starts generating audio while previous joke is still playing.
+    // Playback streams chunks as soon as this line reaches the front of the chain.
+    const audioBuffer = prefetchTts(text.trim(), gen, previousText);
 
     ttsChainRef.current = ttsChainRef.current.then(async () => {
       if (ttsGenerationRef.current !== gen || !isRunningRef.current) return;
@@ -170,7 +198,7 @@ export default function LiveSessionController({
       useSessionStore.getState().logTiming(
         `tts: "${text.trim().slice(0, 60)}" prev="${prevTail}"`,
       );
-      await scheduleFromPrefetch(audioPromise, gen);
+      await scheduleFromPrefetch(audioBuffer, gen);
     });
   }
 
@@ -187,88 +215,108 @@ export default function LiveSessionController({
    * Start TTS stream immediately — buffer audio chunks.
    * Fires outside the chain so multiple prefetches overlap (no dead air between jokes).
    */
-  async function prefetchTts(text: string, gen: number, previousText?: string): Promise<string[] | null> {
-    if (!isRunningRef.current) return null;
-    const ttsSpanId = useSessionStore.getState().beginSpan("tts", text.slice(0, 22));
-
-    try {
-      const resp = await fetch("/api/tts-ws", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          ...(previousText ? { previousText } : {}),
-          voiceSettings: useSessionStore.getState().voiceSettings,
-        }),
-      });
-
-      if (!resp.ok || !resp.body || ttsGenerationRef.current !== gen) {
-        useSessionStore.getState().endSpan(ttsSpanId);
-        return null;
-      }
-
-      const chunks: string[] = [];
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (ttsGenerationRef.current !== gen || !isRunningRef.current) {
-          reader.cancel();
-          useSessionStore.getState().endSpan(ttsSpanId);
-          return null;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6)) as { type: string; chunk?: string };
-            if (event.type === "audio" && event.chunk) {
-              chunks.push(event.chunk);
-            }
-          } catch { /* malformed SSE line */ }
-        }
-      }
-
-      useSessionStore.getState().endSpan(ttsSpanId);
-      return chunks;
-    } catch (e) {
-      useSessionStore.getState().endSpan(ttsSpanId);
-      if ((e as Error).name !== "AbortError") {
-        console.error("[live] TTS prefetch error:", e);
-      }
-      return null;
+  function prefetchTts(text: string, gen: number, previousText?: string): TtsChunkBuffer {
+    const audio = new TtsChunkBuffer();
+    if (!isRunningRef.current) {
+      audio.finish(true);
+      return audio;
     }
+    const ttsSpanId = useSessionStore.getState().beginSpan("tts", text.slice(0, 22));
+    let spanEnded = false;
+    const endSpan = () => {
+      if (spanEnded) return;
+      spanEnded = true;
+      useSessionStore.getState().endSpan(ttsSpanId);
+    };
+
+    void (async () => {
+      try {
+        const resp = await fetch("/api/tts-ws", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            ...(previousText ? { previousText } : {}),
+            voiceSettings: useSessionStore.getState().voiceSettings,
+          }),
+        });
+
+        if (!resp.ok || !resp.body || ttsGenerationRef.current !== gen) {
+          endSpan();
+          audio.finish(true);
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (ttsGenerationRef.current !== gen || !isRunningRef.current) {
+            reader.cancel();
+            endSpan();
+            audio.finish(true);
+            return;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const event = JSON.parse(line.slice(6)) as { type: string; chunk?: string };
+              if (event.type === "audio" && event.chunk) {
+                audio.push(event.chunk);
+              }
+            } catch { /* malformed SSE line */ }
+          }
+        }
+
+        endSpan();
+        audio.finish();
+      } catch (e) {
+        endSpan();
+        audio.finish(true);
+        if ((e as Error).name !== "AbortError") {
+          console.error("[live] TTS prefetch error:", e);
+        }
+      }
+    })();
+
+    return audio;
   }
 
   /**
-   * Wait for prefetch to complete, then enqueue all buffered chunks for playback.
+   * Enqueue chunks as soon as they are available for this line's turn.
    * Runs inside the ttsChain so playback order is preserved.
    */
   async function scheduleFromPrefetch(
-    audioPromise: Promise<string[] | null>,
+    audio: TtsChunkBuffer,
     gen: number,
   ): Promise<void> {
-    const chunks = await audioPromise;
-    if (!chunks || !isRunningRef.current || ttsGenerationRef.current !== gen) return;
+    let cursor = 0;
+    let queuedAny = false;
 
-    for (const chunk of chunks) {
-      playback.enqueueChunk(chunk);
+    while (isRunningRef.current && ttsGenerationRef.current === gen) {
+      while (cursor < audio.chunks.length) {
+        playback.enqueueChunk(audio.chunks[cursor]);
+        cursor++;
+        if (!queuedAny) {
+          queuedAny = true;
+          recordTtfs();
+          useSessionStore.getState().setIsSpeaking(true);
+        }
+      }
+
+      if (audio.done) break;
+      await audio.waitForUpdate();
     }
 
-    if (ttsGenerationRef.current !== gen) {
-      playback.flush();
-      return;
-    }
-
-    recordTtfs();
-    useSessionStore.getState().setIsSpeaking(true);
+    if (ttsGenerationRef.current !== gen) playback.flush();
   }
 
   /** Record time-to-first-speech metric (recording already started at kickoff). */

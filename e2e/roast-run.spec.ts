@@ -42,6 +42,7 @@ test.describe("Full Roast Run", () => {
       (window as unknown as Record<string, unknown>).__COMEDIAN_CONFIG__ = {
         answerWaitMs: 3000,      // 3s before prodding (gives Playwright time to type)
         answerSilenceMs: 800,    // 0.8s silence triggers generation
+        unfinalizedAnswerSilenceMs: 900,
         speculativeMinWords: 2,  // speculative on 2+ words
         maxProds: 1,
         greetingVisionTimeoutMs: 600,

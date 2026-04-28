@@ -6,6 +6,7 @@ describe("getJokePrompt", () => {
     it("contains greeting task heading for greeting context", () => {
       const prompt = getJokePrompt("greeting", "kvetch", 3, "clean");
       expect(prompt).toContain("Task: Quick Opening");
+      expect(prompt).toContain("HARD LENGTH CAP: 24 words total");
     });
 
     it("contains vision_opening task heading", () => {
@@ -69,6 +70,12 @@ describe("getJokePrompt", () => {
       const prompt = getJokePrompt("answer_roast", "kvetch", 3, "clean");
       expect(prompt).toContain("PIPELINE RULE");
       expect(prompt).toContain("JOKES ALREADY DELIVERED THIS CYCLE");
+    });
+
+    it("includes quality and topper guidance", () => {
+      const prompt = getJokePrompt("answer_roast", "kvetch", 3, "clean");
+      expect(prompt).toContain("Joke Quality Bar");
+      expect(prompt).toContain("shorter topper");
     });
 
     it("includes BACKGROUND RULE", () => {

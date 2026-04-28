@@ -5,6 +5,7 @@ import { ComedianBrain, type ComedianBrainDeps } from "@/lib/comedianBrain";
 vi.mock("@/lib/comedianConfig", () => ({
   COMEDIAN_CONFIG: {
     answerSilenceMs: 30,
+    unfinalizedAnswerSilenceMs: 80,
     answerWaitMs: 50,
     earlyListenMs: 20,
     visionIntervalMs: 100,
@@ -189,6 +190,29 @@ describe("ComedianBrain", () => {
 
       brain.onInputTranscription("My name is Bob");
       expect(stateHistory(deps)).toContain("pre_generate");
+    });
+
+    it("waits longer for unfinalized multi-word answers before generating", async () => {
+      vi.useFakeTimers();
+      try {
+        const deps = makeDeps();
+        const brain = new ComedianBrain(deps);
+        brain.start();
+        brain.onTtsQueueDrained();
+
+        brain.onInputTranscription("I work");
+        await vi.advanceTimersByTimeAsync(40);
+        expect(stateHistory(deps)).not.toContain("generating");
+
+        brain.onInputTranscription("at a company");
+        await vi.advanceTimersByTimeAsync(40);
+        expect(stateHistory(deps)).not.toContain("generating");
+
+        await vi.advanceTimersByTimeAsync(80);
+        expect(stateHistory(deps)).toContain("generating");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("ignores empty text", () => {

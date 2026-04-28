@@ -1,23 +1,23 @@
 import { NextResponse } from "next/server";
-import { exec } from "child_process";
+import { spawn } from "child_process";
 import { mkdir } from "fs/promises";
-import { tmpdir } from "os";
-import { join } from "path";
-
-const VIDEOS_FOLDER = join(tmpdir(), "roastie-videos");
+import { VIDEOS_FOLDER } from "@/lib/videoPaths";
 
 export async function POST() {
   await mkdir(VIDEOS_FOLDER, { recursive: true });
 
-  // Open folder in the OS file explorer (Windows: explorer, macOS: open, Linux: xdg-open)
-  const cmd =
+  const [command, ...args] =
     process.platform === "win32"
-      ? `explorer "${VIDEOS_FOLDER}"`
+      ? ["explorer.exe", VIDEOS_FOLDER]
       : process.platform === "darwin"
-      ? `open "${VIDEOS_FOLDER}"`
-      : `xdg-open "${VIDEOS_FOLDER}"`;
+        ? ["open", VIDEOS_FOLDER]
+        : ["xdg-open", VIDEOS_FOLDER];
 
-  exec(cmd);
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
 
   return NextResponse.json({ ok: true, folder: VIDEOS_FOLDER });
 }

@@ -105,6 +105,17 @@ function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+function compactGreetingText(text: string): string {
+  const trimmed = text.replace(/\s+/g, " ").trim();
+  if (wordCount(trimmed) <= 24) return trimmed;
+
+  const sentences = trimmed.match(/[^.!?]+[.!?]+/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
+  const preferred = sentences.at(-1) ?? trimmed;
+  const words = preferred.split(/\s+/).filter(Boolean);
+  if (words.length <= 24) return preferred;
+  return `${words.slice(0, 24).join(" ").replace(/[,.!?;:]+$/, "")}.`;
+}
+
 function lastWordToken(text: string): string {
   const match = text.match(/([A-Za-z0-9]+)[^A-Za-z0-9]*$/);
   return match?.[1] ?? "";
@@ -504,6 +515,7 @@ export class ComedianBrain {
     if (this.state === "generating") {
       const oldAnswer = this.answerBuffer.trim();
       this._accumulateAnswer(text, finished);
+      if (finished) this.sttHadFinalSegment = true;
       const newAnswer = this.answerBuffer.trim();
       const appended = newAnswer.toLowerCase().startsWith(oldAnswer.toLowerCase())
         ? newAnswer.slice(oldAnswer.length).trim()
@@ -527,6 +539,16 @@ export class ComedianBrain {
         this._clearTimers();
         this.deps.cancelSpeech();
         this.deps.logTiming(`brain: correction cue during generating — "${text}" (restarting)`);
+        this._transition("pre_generate");
+        this._cancelSpeculative();
+        this._startLateSilenceTimer();
+        return;
+      }
+
+      if (appended && /[A-Za-z0-9]/.test(appended)) {
+        this._clearTimers();
+        this.deps.cancelSpeech();
+        this.deps.logTiming(`brain: late transcription extended answer — "${appended}" (restarting)`);
         this._transition("pre_generate");
         this._cancelSpeculative();
         this._startLateSilenceTimer();
@@ -604,17 +626,6 @@ export class ComedianBrain {
       if (finished) this.sttHadFinalSegment = true;
       this.deps.logTiming(`brain: heard "${text}" → buffer now "${this.answerBuffer}" (${wordCount(this.answerBuffer)}w)`);
 
-      // Start speculative generation once we have enough words
-      if (
-        !COMEDIAN_CONFIG.skipPreGeneration &&
-        this.state === "wait_answer" &&
-        wordCount(this.answerBuffer) >= COMEDIAN_CONFIG.speculativeMinWords &&
-        shouldStartSpeculative(this.answerBuffer)
-      ) {
-        this._transition("pre_generate");
-        this._startSpeculative();
-      }
-
       // Transcript-based early endpointing: complete immediately when the final transcript
       // looks like a complete thought OR a viable short answer (name/yes-no/number).
       if (
@@ -628,6 +639,18 @@ export class ComedianBrain {
         this._clearTimers();
         this._onAnswerComplete();
         return;
+      }
+
+      // Start speculative generation once we have enough words. Finished transcripts
+      // endpoint above first, avoiding a wasted speculative call on final answers.
+      if (
+        !COMEDIAN_CONFIG.skipPreGeneration &&
+        this.state === "wait_answer" &&
+        wordCount(this.answerBuffer) >= COMEDIAN_CONFIG.speculativeMinWords &&
+        shouldStartSpeculative(this.answerBuffer)
+      ) {
+        this._transition("pre_generate");
+        this._startSpeculative();
       }
 
       this._startAnswerSilenceTimer();
@@ -868,12 +891,13 @@ export class ComedianBrain {
         this.deps.queueSpeak("Oh, wow. Okay. Let me get a look at you.", "energetic", 0.8);
         this._addLedger("joke", "Oh, wow. Okay. Let me get a look at you.", []);
       } else {
-        for (const joke of response.jokes) {
-          this.deps.queueSpeak(joke.text, joke.motion, joke.intensity);
-          this._addLedger("joke", joke.text, response.tags ?? []);
-          this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
-          this.lastJokeIntensity = joke.intensity;
-        }
+        const joke = response.jokes[0];
+        const text = compactGreetingText(joke.text);
+        if (text !== joke.text) this.deps.logTiming(`brain: compacted greeting to ${wordCount(text)}w`);
+        this.deps.queueSpeak(text, joke.motion, joke.intensity);
+        this._addLedger("joke", text, response.tags ?? []);
+        this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
+        this.lastJokeIntensity = joke.intensity;
       }
       this.deps.setMotion("energetic", 0.8);
       this.greetingSpeechQueued = true;
@@ -1075,11 +1099,9 @@ export class ComedianBrain {
 
   private _startAnswerSilenceTimer(): void {
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
-    const silenceMs = this.vadAvailable
-      ? COMEDIAN_CONFIG.answerSilenceMs
-      : this._isViableAnswer(this.answerBuffer)
-        ? COMEDIAN_CONFIG.answerSilenceMs
-        : Math.max(COMEDIAN_CONFIG.answerSilenceMs, 900);
+    const silenceMs = this._answerNeedsMoreStt()
+      ? Math.max(COMEDIAN_CONFIG.answerSilenceMs, COMEDIAN_CONFIG.unfinalizedAnswerSilenceMs ?? 1000)
+      : COMEDIAN_CONFIG.answerSilenceMs;
     this.silenceTimer = setTimeout(() => {
       if (this.state === "wait_answer" || this.state === "pre_generate") {
         this._onAnswerComplete();
@@ -1090,11 +1112,23 @@ export class ComedianBrain {
   /** Shorter silence window used after late-transcription bounces — STT is clearly ending. */
   private _startLateSilenceTimer(): void {
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    const silenceMs = this._answerNeedsMoreStt()
+      ? Math.max(COMEDIAN_CONFIG.answerSilenceMs, 650)
+      : Math.round(COMEDIAN_CONFIG.answerSilenceMs / 2);
     this.silenceTimer = setTimeout(() => {
       if (this.state === "wait_answer" || this.state === "pre_generate") {
         this._onAnswerComplete();
       }
-    }, Math.round(COMEDIAN_CONFIG.answerSilenceMs / 2));
+    }, silenceMs);
+  }
+
+  private _answerNeedsMoreStt(): boolean {
+    const answer = this.answerBuffer.trim();
+    if (!answer || this.sttHadFinalSegment) return false;
+    if (ComedianBrain._looksComplete(answer)) return false;
+    const words = wordCount(answer);
+    if (words <= 1 && this._isViableAnswer(answer)) return false;
+    return words >= 2;
   }
 
   private enterProdding(): void {

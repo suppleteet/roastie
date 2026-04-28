@@ -1,5 +1,10 @@
 "use client";
 import { useRef, useImperativeHandle, forwardRef } from "react";
+import { COMPOSITOR_SIZE } from "@/lib/constants";
+import {
+  chooseRecorderFormat,
+  recommendedVideoBitsPerSecond,
+} from "@/lib/mediaRecorderSupport";
 
 export interface VideoRecorderHandle {
   start(compositorStream: MediaStream, audioStream: MediaStream | null): void;
@@ -9,6 +14,7 @@ export interface VideoRecorderHandle {
 const VideoRecorder = forwardRef<VideoRecorderHandle>(function VideoRecorder(_props, ref) {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const mimeTypeRef = useRef("video/webm");
 
   useImperativeHandle(ref, () => ({
     start(compositorStream: MediaStream, audioStream: MediaStream | null) {
@@ -25,29 +31,29 @@ const VideoRecorder = forwardRef<VideoRecorderHandle>(function VideoRecorder(_pr
         return;
       }
       const combined = new MediaStream(tracks);
-
-      const mimeType =
-        MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-          ? "video/webm;codecs=vp9"
-          : MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
-          ? "video/webm;codecs=vp8"
-          : "video/webm";
+      const format = chooseRecorderFormat();
+      const videoBitsPerSecond = recommendedVideoBitsPerSecond(COMPOSITOR_SIZE, COMPOSITOR_SIZE);
 
       let recorder: MediaRecorder;
       try {
-        recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 8_000_000 });
+        recorder = new MediaRecorder(combined, {
+          mimeType: format.mimeType,
+          videoBitsPerSecond,
+          audioBitsPerSecond: 128_000,
+        });
       } catch {
         try {
-          recorder = new MediaRecorder(combined, { mimeType });
+          recorder = new MediaRecorder(combined, { mimeType: format.mimeType });
         } catch {
           recorder = new MediaRecorder(combined, { mimeType: "video/webm" });
         }
       }
+      mimeTypeRef.current = recorder.mimeType || format.mimeType || "video/webm";
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
       recorder.onerror = (e) => console.error("[recorder] error:", e);
-      recorder.start(100);
+      recorder.start(1000);
       recorderRef.current = recorder;
     },
 
@@ -55,13 +61,34 @@ const VideoRecorder = forwardRef<VideoRecorderHandle>(function VideoRecorder(_pr
       return new Promise((resolve) => {
         const recorder = recorderRef.current;
         if (!recorder || recorder.state === "inactive") {
-          resolve(new Blob(chunksRef.current, { type: "video/webm" }));
+          resolve(new Blob(chunksRef.current, { type: mimeTypeRef.current }));
           return;
         }
-        recorder.onstop = () => {
-          resolve(new Blob(chunksRef.current, { type: "video/webm" }));
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          recorderRef.current = null;
+          resolve(new Blob(chunksRef.current, { type: mimeTypeRef.current }));
         };
-        recorder.stop();
+        recorder.onstop = () => {
+          finish();
+        };
+        recorder.onerror = (e) => {
+          console.error("[recorder] stop error:", e);
+          finish();
+        };
+        try {
+          recorder.requestData();
+        } catch {
+          // Some browsers throw if requestData races with stop; onstop still resolves.
+        }
+        try {
+          recorder.stop();
+        } catch {
+          finish();
+        }
+        window.setTimeout(finish, 3000);
       });
     },
   }));

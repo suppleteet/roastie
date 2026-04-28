@@ -91,7 +91,10 @@ export function useCompositor(
     }
 
     rafRef.current = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(rafRef.current);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      stream.getTracks().forEach((track) => track.stop());
+    };
   }, [puppetCanvasRef, webcamVideoRef]);
 
   return handle;

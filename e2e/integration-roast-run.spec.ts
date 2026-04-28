@@ -58,6 +58,7 @@ test.describe("Integration Roast Run", () => {
       (window as unknown as Record<string, unknown>).__COMEDIAN_CONFIG__ = {
         answerWaitMs: 4000,
         answerSilenceMs: 800,
+        unfinalizedAnswerSilenceMs: 1000,
         speculativeMinWords: 2,
         maxProds: 1,
         greetingVisionTimeoutMs: 600,

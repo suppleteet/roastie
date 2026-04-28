@@ -56,6 +56,7 @@ export class ComedianBrainDriver extends LiveSessionMock {
       (window as unknown as Record<string, unknown>).__COMEDIAN_CONFIG__ = {
         answerWaitMs: 80,
         answerSilenceMs: 30,
+        unfinalizedAnswerSilenceMs: 80,
         maxProds: 1,
         visionIntervalMs: 200,
         greetingVisionTimeoutMs: 300,

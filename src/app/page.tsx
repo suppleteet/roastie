@@ -202,35 +202,20 @@ function MainApp() {
 
     ensureLiveTokenPrefetch();
 
-    // If camera was already granted during consent screen, just add audio and go
+    // If camera was already granted during consent screen, go straight to warmup.
+    // LiveSessionController owns microphone startup so we don't request mic twice.
     if (webcamStream) {
-      if (sessionMode === "conversation" && !mockModeRef.current) {
-        navigator.mediaDevices.getUserMedia({ audio: true })
-          .then((audioStream) => {
-            audioStream.getAudioTracks().forEach((t) => webcamStream.addTrack(t));
-            startPreRoastGreetingWarmup(webcamStream);
-            setPhase("roasting", "PERMISSIONS_GRANTED");
-          })
-          .catch((err) => {
-            const message = err instanceof Error ? err.message : String(err);
-            console.error("Microphone denied:", message);
-            logTiming(`mic: getUserMedia(audio) failed — ${message}`);
-            setError(
-              `Microphone access failed: ${message}. Please allow mic access in browser settings and retry.`,
-            );
-            setPhase("idle", "PERMISSIONS_DENIED");
-          });
-      } else {
-        setPhase("roasting", "PERMISSIONS_GRANTED");
-      }
+      startPreRoastGreetingWarmup(webcamStream);
+      setPhase("roasting", "PERMISSIONS_GRANTED");
       return;
     }
 
-    // Fallback: camera not yet granted — request everything now
+    // Fallback: camera not yet granted — request video only. The live audio hook
+    // starts mic capture in the background and can gracefully fall back if denied.
     navigator.mediaDevices
       .getUserMedia({
         video: { width: { ideal: 720 }, height: { ideal: 720 }, facingMode: { ideal: "user" } },
-        audio: sessionMode === "conversation" && !mockModeRef.current,
+        audio: false,
       })
       .then((stream) => {
         setWebcamStream(stream);

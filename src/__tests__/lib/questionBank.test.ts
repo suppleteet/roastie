@@ -15,6 +15,11 @@ describe("QUESTION_BANK", () => {
     expect(QUESTION_BANK.find((q) => q.id === "name")).toBeDefined();
   });
 
+  it("includes roastable setup questions beyond demographics", () => {
+    const ids = QUESTION_BANK.map((q) => q.id);
+    expect(ids).toEqual(expect.arrayContaining(["look", "bad_habit", "free_time", "delusion"]));
+  });
+
   for (const q of QUESTION_BANK) {
     describe(`question: ${q.id}`, () => {
       it("has a non-empty question string", () => {

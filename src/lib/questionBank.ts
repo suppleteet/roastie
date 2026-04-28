@@ -139,4 +139,68 @@ export const QUESTION_BANK: ComedyQuestion[] = [
       "It's okay. I'll be gentle. Probably.",
     ],
   },
+  {
+    id: "look",
+    question: "What look were you going for today?",
+    vulgarQuestions: [
+      "What look were you going for today, and who let it happen?",
+      "Explain the outfit. I want the crime scene report.",
+      "What was the plan with this look, if there was one?",
+      "Who styled you today, a power outage?",
+      "Describe the aesthetic before I call it evidence.",
+    ],
+    jokeContext: "Style roast - what their outfit, hair, posture, and confidence suggest they attempted versus what landed.",
+    prodLines: [
+      "The look. Give it a name before I do.",
+      "I can guess, but I'd rather hear the defense statement.",
+    ],
+  },
+  {
+    id: "bad_habit",
+    question: "What's your worst habit that you pretend is a personality?",
+    vulgarQuestions: [
+      "What's your worst habit that you pretend is a personality, you menace?",
+      "Name the red flag you keep rebranding as charm.",
+      "What's the habit everyone around you is sick of?",
+      "Tell me your worst habit. I want fresh ammunition.",
+      "What toxic little routine are we calling self-care today?",
+    ],
+    jokeContext: "Bad habit roast - self-sabotage, annoying routines, red flags, and the gap between self-image and reality.",
+    prodLines: [
+      "Don't worry, your face already suggested a few. Pick one.",
+      "Worst habit. Not all of them, we'll be here until winter.",
+    ],
+  },
+  {
+    id: "free_time",
+    question: "What do you do when nobody is making you be useful?",
+    vulgarQuestions: [
+      "What do you do when nobody is making you be useful, if that ever happens?",
+      "How do you waste time when nobody's supervising the disaster?",
+      "What's your hobby, besides lowering expectations?",
+      "When you're off the clock, what dumb little ritual eats your life?",
+      "Tell me what you do for fun, and try not to make it sad.",
+    ],
+    jokeContext: "Hobby/free-time roast - how leisure choices reveal taste, avoidance, loneliness, delusion, or misplaced confidence.",
+    prodLines: [
+      "Hobby, habit, coping mechanism. Whatever you call it.",
+      "What do you do for fun? And don't say 'this,' we're both suffering.",
+    ],
+  },
+  {
+    id: "delusion",
+    question: "What are you weirdly confident about?",
+    vulgarQuestions: [
+      "What are you weirdly confident about, against all available evidence?",
+      "What delusion are you most committed to?",
+      "What do you think you're good at that your friends politely ignore?",
+      "Where is your confidence most divorced from reality?",
+      "What's your loudest, dumbest area of expertise?",
+    ],
+    jokeContext: "Confidence roast - overconfidence, delusion, fake expertise, and the mismatch between claim and visible reality.",
+    prodLines: [
+      "There has to be something. Confidence usually survives without evidence.",
+      "What are you weirdly confident about? Besides sitting there like this.",
+    ],
+  },
 ];
