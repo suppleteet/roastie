@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     const voiceSettings = overrideSettings ?? {
       stability: 0.72,
       similarity_boost: 0.7,
-      style: 0.2,
+      style: 1,
       speed: 0.88,
       use_speaker_boost: true,
     };

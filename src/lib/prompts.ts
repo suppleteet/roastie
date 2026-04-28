@@ -170,8 +170,12 @@ Do NOT make jokes about their appearance or background instead — roast THAT an
 
 FORMAT: Max 20 words per sentence, punchline at the end. Each sentence self-contained.
 
-FILLER RULE: If FILLER_ALREADY_SAID is provided, a short filler sound (like "Mmm." or "Uh huh.") was already spoken.
-Do NOT open your joke with a similar sound or filler word — jump straight into the roast.
+FILLER RULE: If FILLER_ALREADY_SAID is provided, that exact line was just spoken aloud right before your joke.
+Do NOT open your joke with the same sound, filler word, or phrasing — jump straight into the roast.
+If the filler ENDED IN A QUESTION MARK (e.g. "Tyler?", "So — Seattle?", "a dentist, huh?"), it already
+echoed the user's answer back to them as a question. Your joke MUST NOT open by repeating the answer as
+a question or re-stating it ("Tyler? Really?", "So a dentist?", "Seattle? Of course."). That beat is done —
+go straight into the punchline.
 
 PIPELINE RULE: If JOKES ALREADY DELIVERED THIS CYCLE is provided, those jokes have already played aloud.
 Do NOT re-introduce the answer, repeat the question format, or echo the user's words again.
@@ -238,6 +242,27 @@ BACKGROUND RULE:
 
 Set "relevant": true. No "followUp" needed.
 Generate 1 joke.`,
+
+    wrapup: `## Task: Closing Sign-Off — Say Goodbye in a Clever Way
+The show is ending. Generate exactly 1 closing line that delivers a CLEVER GOODBYE — a sign-off that includes a farewell wrapped inside one last roast. This is a comedian leaving the stage, not just dropping one more burn.
+
+The line MUST:
+- Acknowledge that you're leaving — but do it through character. Use the user's name + one or two specifics they revealed (job, age, hobby, town, etc.) to make the goodbye personal.
+- Land as a mic-drop AND a farewell at once. Examples of structure (do NOT copy verbatim, invent fresh):
+  · "Tyler, I'd say it's been a pleasure but at 57 even the lying is exhausting. Goodnight."
+  · "And on that note, Tyler, I'm out. Go grade some crayon drawings."
+  · "Alright, that's me. Tyler, try not to peak any harder than you already have."
+- Max 30 words. Punchline at the end.
+- Stay completely in character — no breaking the fourth wall, no "thanks for watching," no "thanks for coming," no meta references to "the show." That's hack.${contentMode === "vulgar" ? `
+
+VULGAR MODE — close with one last GENERAL gut-punch insult as part of the goodbye. Lean into crude, dismissive farewell vibes. Examples (invent fresh, don't copy):
+  · "I gotta go, you sad piece of shit. Try not to die alone."
+  · "Alright Tyler, fuck off back to your finger paintings."
+  · "I'm out. Tyler, you absolute waste of skin — goodnight."
+The goodbye must still tie to specifics they revealed, but the farewell itself can be a blunt, profane sign-off rather than a polished mic-drop.` : ""}
+
+Set "relevant": true. No "followUp". No "redirect".
+Generate exactly 1 joke.`,
 
     hopper: `## Task: Background Joke Generation
 Generate 2-3 candidate jokes for the joke hopper, inspired by any context provided.

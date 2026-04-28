@@ -295,6 +295,36 @@ describe("transcript history", () => {
     useSessionStore.getState().clearTranscriptHistory();
     expect(useSessionStore.getState().transcriptHistory).toHaveLength(0);
   });
+
+  it("assigns a unique groupId to each non-append entry", () => {
+    useSessionStore.getState().clearTranscriptHistory();
+    useSessionStore.getState().pushTranscriptEntry("puppet", "First joke");
+    useSessionStore.getState().pushTranscriptEntry("puppet", "Different batch");
+    const history = useSessionStore.getState().transcriptHistory;
+    expect(history).toHaveLength(2);
+    expect(history[0].groupId).toBeTruthy();
+    expect(history[1].groupId).toBeTruthy();
+    expect(history[0].groupId).not.toBe(history[1].groupId);
+  });
+
+  it("append=true shares the previous same-role entry's groupId", () => {
+    useSessionStore.getState().clearTranscriptHistory();
+    useSessionStore.getState().pushTranscriptEntry("puppet", "Joke 1");
+    useSessionStore.getState().pushTranscriptEntry("puppet", "Joke 2", { append: true });
+    const history = useSessionStore.getState().transcriptHistory;
+    expect(history).toHaveLength(2);
+    expect(history[0].groupId).toBe(history[1].groupId);
+    expect(history[0].text).toBe("Joke 1");
+    expect(history[1].text).toBe("Joke 2");
+  });
+
+  it("append=true starts a new group when previous entry has different role", () => {
+    useSessionStore.getState().clearTranscriptHistory();
+    useSessionStore.getState().pushTranscriptEntry("user", "I dunno");
+    useSessionStore.getState().pushTranscriptEntry("puppet", "Joke after user", { append: true });
+    const history = useSessionStore.getState().transcriptHistory;
+    expect(history[0].groupId).not.toBe(history[1].groupId);
+  });
 });
 
 describe("timeline spans", () => {

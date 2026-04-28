@@ -20,7 +20,8 @@ export type SessionTrigger =
   | "SHARE_DISMISSED"
   | "RESET"
   | "DEBUG_TOGGLE"
-  | "ERROR";
+  | "ERROR"
+  | "SESSION_TIMEOUT";
 
 export const SESSION_TRANSITIONS: TransitionMap<SessionPhase> = {
   "idle":                   ["consent", "requesting-permissions"],

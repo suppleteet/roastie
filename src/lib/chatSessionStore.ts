@@ -255,9 +255,16 @@ export function deleteSession(id: string): void {
  * This replaces the full system prompt on each request — only the small
  * task-specific instructions are sent as part of the user message.
  */
-export function getContextInstructions(context: JokeContext): string {
+export function getContextInstructions(
+  context: JokeContext,
+  contentMode: "clean" | "vulgar" = "clean",
+): string {
   // These are the task-specific parts from prompts.ts contextInstructions,
   // but without the persona/character setup (that's in the chat systemInstruction).
+  const wrapupVulgarSuffix = contentMode === "vulgar"
+    ? `\n\nVULGAR MODE: close with one last GENERAL gut-punch insult as part of the goodbye — crude, dismissive (e.g. "I gotta go, you sad piece of shit," "fuck off, [name]"). Tie to their specifics, but the farewell itself can be blunt and profane.`
+    : "";
+
   const instructions: Record<JokeContext, string> = {
     greeting: `TASK: Opening greeting + first visual reaction. React to what you SEE.
 Keep it tight: quick opener + ONE comprehensive roast line that combines multiple observed traits
@@ -270,7 +277,8 @@ Max 20 words, punchline at the end. Set "relevant": true. Generate exactly 1 jok
 
     answer_roast: `TASK: Roast the user's answer. 1-2 jokes that directly reference and roast their answer.
 Max 20 words per sentence, punchline at the end. Each sentence self-contained.
-If FILLER_ALREADY_SAID is provided, do NOT open with a similar filler sound.
+If FILLER_ALREADY_SAID is provided, that exact line was just spoken aloud — do NOT open with the same sound or phrasing.
+If FILLER_ALREADY_SAID ends in a question mark (e.g. "Tyler?", "So — Seattle?", "a dentist, huh?"), it already echoed the user's answer back as a question. Do NOT open your joke by re-asking or re-stating the answer ("Tyler? Really?", "So a dentist?") — go straight into the punchline.
 If off-topic, set "relevant": false with a witty "redirect".
 Include "followUp" if the answer invites one (open-ended, never A/B format).
 
@@ -287,6 +295,12 @@ Generate 1-2 jokes.`,
     hopper: `TASK: Background joke generation. 2-3 candidate jokes for later use.
 Max 20 words each, punchline at the end, one sentence only.
 Score each honestly (8+ = "would interrupt the show"). Generate 2-3 jokes.`,
+
+    wrapup: `TASK: CLOSING SIGN-OFF — clever goodbye wrapped in one last roast. The show is ending and you're leaving the stage.
+Use KNOWN FACTS (name + a couple specifics they revealed) so the farewell is personal.
+The line MUST include a goodbye delivered IN CHARACTER — never break the fourth wall with "thanks for watching" or meta references to "the show."
+Max 30 words, punchline at the end. No question, no follow-up.${wrapupVulgarSuffix}
+Set "relevant": true. Generate exactly 1 joke.`,
   };
 
   return instructions[context];

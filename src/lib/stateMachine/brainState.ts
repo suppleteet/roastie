@@ -13,7 +13,8 @@ export type BrainState =
   | "redirecting"
   | "confirm_answer"
   | "check_vision"
-  | "vision_react";
+  | "vision_react"
+  | "wrapup";
 
 export type MicMode = "off" | "listening" | "passive";
 
@@ -43,22 +44,25 @@ export type BrainTrigger =
   | "ANSWER_CONFIRMED"
   | "ANSWER_REJECTED"
   | "DEV_NOTE_ENTER"
-  | "DEV_NOTE_RESUME";
+  | "DEV_NOTE_RESUME"
+  | "WRAPUP_REQUESTED"
+  | "WRAPUP_DRAINED";
 
 export const BRAIN_TRANSITIONS: TransitionMap<BrainState> = {
-  greeting:      ["vision_jokes", "ask_question"],
-  vision_jokes:  ["ask_question"],
-  ask_question:  ["wait_answer", "check_vision", "dev_note"],
-  wait_answer:   ["pre_generate", "prodding", "generating", "confirm_answer", "ask_question", "check_vision", "dev_note"],
-  prodding:      ["wait_answer", "check_vision"],
-  pre_generate:  ["generating", "confirm_answer", "ask_question", "prodding", "check_vision"],
-  generating:    ["delivering", "redirecting"],
-  delivering:    ["check_vision", "ask_question", "dev_note"],
-  dev_note:      ["check_vision", "ask_question"],
-  confirm_answer: ["generating", "wait_answer", "ask_question", "check_vision"],
-  redirecting:   ["wait_answer"],
-  check_vision:  ["vision_react", "ask_question", "dev_note"],
-  vision_react:  ["ask_question"],
+  greeting:      ["vision_jokes", "ask_question", "wrapup"],
+  vision_jokes:  ["ask_question", "wrapup"],
+  ask_question:  ["wait_answer", "check_vision", "dev_note", "wrapup"],
+  wait_answer:   ["pre_generate", "prodding", "generating", "confirm_answer", "ask_question", "check_vision", "dev_note", "wrapup"],
+  prodding:      ["wait_answer", "check_vision", "wrapup"],
+  pre_generate:  ["generating", "confirm_answer", "ask_question", "prodding", "check_vision", "wrapup"],
+  generating:    ["delivering", "redirecting", "wrapup"],
+  delivering:    ["check_vision", "ask_question", "dev_note", "wrapup"],
+  dev_note:      ["check_vision", "ask_question", "wrapup"],
+  confirm_answer: ["generating", "wait_answer", "ask_question", "check_vision", "wrapup"],
+  redirecting:   ["wait_answer", "wrapup"],
+  check_vision:  ["vision_react", "ask_question", "dev_note", "wrapup"],
+  vision_react:  ["ask_question", "wrapup"],
+  wrapup:        [],
 };
 
 export interface BrainStateConfig {
@@ -80,4 +84,5 @@ export const BRAIN_STATE_CONFIG: Record<BrainState, BrainStateConfig> = {
   redirecting:   { micMode: "passive",   canSkipTo: null },
   check_vision:  { micMode: "passive",   canSkipTo: null },
   vision_react:  { micMode: "passive",   canSkipTo: null },
+  wrapup:        { micMode: "off",       canSkipTo: null },
 };

@@ -41,6 +41,7 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
       className="absolute inset-0 pointer-events-none z-10 overflow-hidden"
       data-testid="hud-overlay"
       data-brain-state={brainState ?? ""}
+      data-current-question={currentQuestion ?? ""}
     >
       {/* Top bar */}
       <div className="absolute top-4 left-4 flex items-center gap-2 pointer-events-none">

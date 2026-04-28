@@ -48,7 +48,9 @@ export interface LedgerEntry {
 }
 
 export interface ComedianBrainDeps {
-  queueSpeak: (text: string, motion?: MotionState, intensity?: number) => void;
+  /** appendToPrev: when true, merge this text into the previous puppet transcript entry
+   *  (single paragraph for streamed multi-joke deliveries). TTS pipeline is unaffected. */
+  queueSpeak: (text: string, motion?: MotionState, intensity?: number, appendToPrev?: boolean) => void;
   cancelSpeech: () => void;
   isQueueEmpty: () => boolean;
   setMotion: (state: MotionState, intensity: number) => void;
@@ -77,6 +79,8 @@ export interface ComedianBrainDeps {
   revealSession?: () => void;
   /** Fire-and-forget: save an in-session critique to feedback storage. */
   saveCritique?: (text: string, context: { persona: PersonaId; lastJokeText?: string }) => void;
+  /** Called once after the wrapup closing line has finished playing — controller uses this to setPhase("stopped"). */
+  onSessionEnd?: () => void;
   /** Optional: pre-seed for testing */
   initialHopper?: ScoredJoke[];
   initialLedger?: LedgerEntry[];
@@ -112,6 +116,8 @@ function normalizeForConfirm(text: string): string {
     .trim()
     .replace(/^[,.;:!?-]+/, "")
     .replace(/[,.;:!?-]+$/, "")
+    // Strip leading hesitation markers so the confirm echo doesn't mock the user's filler.
+    .replace(/^(uh+|um+|er+|ah+|so|like|well|okay|oh)\s*[,.]?\s*/i, "")
     .trim();
 }
 
@@ -198,10 +204,10 @@ export class ComedianBrain {
   private pipelinePreviousJokes: string[] = []; // what was already said, so pipeline doesn't repeat
   private pipelinePrefetch: { jokes: JokeItem[]; meta: { followUp?: string; tags?: string[] } | null; done: boolean } | null = null;
   private pipelinePrefetchAbort: AbortController | null = null;
-  /** Pre-queued question — rephrased via LLM while last joke plays; TTS fired when rephrase resolves */
+  /** Pre-queued question — selected during joke delivery so enterAskQuestion can advance without an LLM round-trip. */
   private preQueuedQuestion: ComedyQuestion | null = null;
-  /** True once rephrase resolved and queueSpeak was called */
-  private preQueuedTextReady = false;
+  /** Rephrased text resolved during pre-queue. Null = rephrase didn't finish in time → fall back to original at enterAskQuestion. */
+  private preQueuedRephrasedText: string | null = null;
   private rephraseAbort: AbortController | null = null;
   private answerBuffer = "";
   /** True once Gemini Live sent inputTranscription with finished=true for this answer turn. */
@@ -264,6 +270,10 @@ export class ComedianBrain {
   private greetingVisionTimeout: ReturnType<typeof setTimeout> | null = null;
   private visionJokePrefetch: Promise<JokeResponse | null> | null = null;
 
+  // Wrapup state
+  private pendingWrapup = false;        // true once requestWrapup() fires; consumed by next safe transition
+  private wrapupSessionEnded = false;   // guards onSessionEnd from firing twice
+
   // Deps
   private readonly deps: ComedianBrainDeps;
 
@@ -297,6 +307,8 @@ export class ComedianBrain {
     this.visionOnlyMode = false;
     this._cancelPipelinePrefetch();
     this._cancelRephrase();
+    this.pendingWrapup = false;
+    this.wrapupSessionEnded = false;
 
     // Latency experiment: skip greeting entirely
     if (COMEDIAN_CONFIG.skipGreeting) {
@@ -347,6 +359,27 @@ export class ComedianBrain {
 
   setVadAvailable(available: boolean): void {
     this.vadAvailable = available;
+  }
+
+  /**
+   * Signal the brain to wind down. Called by LiveSessionController when the
+   * session-length timer fires. The brain finishes its current line, then
+   * routes to `wrapup` at the next safe transition (next ask_question or
+   * check_vision return), generates one closing line, and signals onSessionEnd
+   * after TTS drains.
+   */
+  requestWrapup(): void {
+    if (this.pendingWrapup || this.state === "wrapup") return;
+    this.pendingWrapup = true;
+    this.deps.logTiming("brain: wrapup requested — will route to wrapup at next transition");
+
+    // If we're idle waiting for an answer, enter wrapup immediately —
+    // otherwise the transition fires when current speech finishes.
+    if (this.state === "wait_answer" || this.state === "prodding") {
+      this._clearTimers();
+      this._cancelSpeculative();
+      this.enterWrapup();
+    }
   }
 
   // ─── Dev voice notes (gesture-triggered) ──────────────────────────────────────
@@ -514,8 +547,31 @@ export class ComedianBrain {
       return;
     }
 
-    // Passive reactions while puppet is delivering
+    // While the puppet is delivering jokes the user can barge in to correct a mishearing
+    // ("no, my name is Aleks not Alex"). Laughter and tiny acknowledgments stay passive —
+    // anything substantive cancels TTS, replaces the answer buffer, and restarts the pipeline.
     if (this.state === "delivering") {
+      if (this._shouldInterruptDelivering(text)) {
+        this.deps.logTiming(`brain: user barge-in during delivering — "${text}" (restarting)`);
+        this.deps.cancelSpeech();
+        this._clearTimers();
+        this._cancelSpeculative();
+        this._addLedger("reaction", "[interrupted]", []);
+
+        // Treat the new text as the corrected answer.
+        this.answerBuffer = "";
+        this._accumulateAnswer(text, finished);
+        if (finished) this.sttHadFinalSegment = true;
+        this.fillerFiredForAnswer = false; // allow a fresh filler on the corrected answer
+
+        this._transition("pre_generate");
+        if (finished) {
+          this._onAnswerComplete();
+        } else {
+          this._startLateSilenceTimer();
+        }
+        return;
+      }
       this._handleReactionText(text);
       return;
     }
@@ -764,6 +820,9 @@ export class ComedianBrain {
       case "vision_react":
         this.enterAskQuestion();
         break;
+      case "wrapup":
+        this._fireSessionEnd();
+        break;
     }
   }
 
@@ -865,6 +924,10 @@ export class ComedianBrain {
   }
 
   private enterAskQuestion(sameQuestion = false): void {
+    if (this.pendingWrapup) {
+      this.enterWrapup();
+      return;
+    }
     this._transition("ask_question");
     this.answerBuffer = "";
     this.earlyListenActivated = false;
@@ -881,7 +944,7 @@ export class ComedianBrain {
       const followUpText = this.pendingFollowUp;
       this.pendingFollowUp = null;
       this.followUpCount++;
-      this.preQueuedQuestion = null; // follow-up overrides any pre-queue
+      this._clearPreQueue(); // follow-up overrides any pre-queue
       this.currentQuestion = {
         id: "follow_up",
         question: followUpText,
@@ -895,7 +958,7 @@ export class ComedianBrain {
       this.deps.queueSpeak(followUpText, this.lastJokeMotion, this.lastJokeIntensity);
     } else if (sameQuestion && this.currentQuestion) {
       // Re-ask same question (after redirect)
-      this.preQueuedQuestion = null;
+      this._clearPreQueue();
       this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
       this.deps.queueSpeak(this._pickQuestionText(this.currentQuestion), this.lastJokeMotion, this.lastJokeIntensity);
     } else if (this.visionOnlyMode) {
@@ -905,29 +968,29 @@ export class ComedianBrain {
       this.deps.setMotion("idle", 0.3);
       return;
     } else if (this.preQueuedQuestion) {
-      // Rephrase was fired speculatively — consume it
+      // Pre-queued during joke delivery — consume it, no extra LLM round-trip
       this.pendingFollowUp = null;
       this.followUpCount = 0;
       question = this.preQueuedQuestion;
-      const wasReady = this.preQueuedTextReady;
+      const rephrased = this.preQueuedRephrasedText;
       this.preQueuedQuestion = null; // clear so stale rephrase callbacks bail out
-      this.preQueuedTextReady = false;
+      this.preQueuedRephrasedText = null;
       this.askedQuestionIds.add(question.id);
       this.currentQuestion = question;
-      if (wasReady) {
-        if (this.deps.isQueueEmpty()) {
-          // Pre-queued question already drained. Don't re-queue (causes audible duplicates);
-          // move directly into listening since the question was already spoken.
-          this.deps.logTiming("brain: pre-queued question already drained — entering wait_answer");
-          shouldListenImmediately = true;
-        } else {
-          // TTS is still in the chain — gapless
-          this.deps.logTiming("brain: using pre-queued question (zero wait)");
-        }
+      this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
+      if (rephrased) {
+        this.deps.queueSpeak(rephrased, "emphasis", 0.6);
+        this.deps.logTiming(`brain: using pre-queued rephrase — "${rephrased.slice(0, 60)}"`);
       } else {
-        // Rephrase didn't finish in time — fall back to original text immediately
-        this.deps.logTiming("brain: rephrase not ready — using original question text");
-        this._queueQuestionWithBridge(this._pickQuestionText(question));
+        // Rephrase didn't resolve in time — fall back to original with bridge (no second fetch)
+        const text = this._pickQuestionText(question);
+        if (COMEDIAN_CONFIG.skipScriptedLines) {
+          this.deps.queueSpeak(text, "emphasis", 0.6);
+        } else {
+          const bridge = ComedianBrain.QUESTION_BRIDGES[Math.floor(Math.random() * ComedianBrain.QUESTION_BRIDGES.length)];
+          this.deps.queueSpeak(`${bridge} ${text}`, "emphasis", 0.6);
+        }
+        this.deps.logTiming("brain: pre-queue rephrase not ready — using original");
       }
     } else {
       // Clear follow-up state — new topic
@@ -1267,9 +1330,74 @@ export class ComedianBrain {
 
   // Short non-word filler reactions — play immediately when generating starts so there's no dead air.
   // These are speculative/thinking sounds that bridge naturally into the joke via ElevenLabs vocal continuity.
-  private static readonly GENERATING_FILLERS = [
+  private static readonly NONWORD_FILLERS = [
     "Mmm.", "Hm.", "Uh huh.", "Hmm.", "Mmhmm.", "Ohhh.", "Huh.",
   ];
+
+  // Echo fillers — the puppet repeats what it heard back as a question, then the joke lands.
+  // Question-only (no "Mmm. {answer}." prefix variants) so the joke knows not to re-ask the
+  // answer itself. Gated by `_isFillerEchoable` so partial transcripts don't get echoed.
+  private static readonly ECHO_FILLER_TEMPLATES = [
+    "{answer}?",
+    "So — {answer}?",
+    "{answer}, huh?",
+  ];
+
+  /** Probability of picking an echo filler when the answer is echo-eligible. */
+  private static readonly ECHO_FILLER_PROBABILITY = 0.5;
+
+  /** True if the answer is short enough and complete enough to repeat as a filler. */
+  private _isFillerEchoable(answer: string): boolean {
+    const trimmed = answer.trim();
+    const w = wordCount(trimmed);
+    if (w < 1 || w > 8) return false;
+    if (this._answerEchoesRecentRoast(trimmed)) return false;
+
+    // Reject answers ending mid-thought (preposition/conjunction/article/aux verb).
+    // These are the half-sentences that read as "you can't finish a sentence" if echoed.
+    // Strip terminal punctuation first so "I work in." is judged on "in", not on "in.".
+    const stripped = trimmed.replace(/[.?!,]+$/, "").trim();
+    const lastWord = lastWordToken(stripped).toLowerCase();
+    const danglers = new Set([
+      "and", "but", "or", "so", "the", "a", "an", "to", "of", "in", "on", "at",
+      "with", "for", "from", "by", "is", "was", "be", "im", "ive", "ill",
+    ]);
+    if (danglers.has(lastWord)) return false;
+
+    // Sentence-ended → safe to echo.
+    if (/[.?!]$/.test(trimmed)) return true;
+
+    // Short viable answers (names, ages, "single", short jobs).
+    if (this._isViableAnswer(trimmed)) return true;
+
+    return true;
+  }
+
+  /** Strip leading hesitations ("Uh,", "Um,", "So,") so the echo doesn't mock the user's filler. */
+  private static _stripLeadingHesitation(text: string): string {
+    return text.replace(/^(uh+|um+|er+|ah+|so|like|well|okay|oh)\s*[,.]?\s*/i, "").trim();
+  }
+
+  private _pickFiller(answer: string): string {
+    if (this._isFillerEchoable(answer) && Math.random() < ComedianBrain.ECHO_FILLER_PROBABILITY) {
+      const cleaned = ComedianBrain._stripLeadingHesitation(
+        answer.trim().replace(/[.?!,]+$/, "").trim(),
+      );
+      // If stripping left us with too little to echo, fall back to non-word filler.
+      if (wordCount(cleaned) < 1) {
+        return ComedianBrain.NONWORD_FILLERS[
+          Math.floor(Math.random() * ComedianBrain.NONWORD_FILLERS.length)
+        ];
+      }
+      const tpl = ComedianBrain.ECHO_FILLER_TEMPLATES[
+        Math.floor(Math.random() * ComedianBrain.ECHO_FILLER_TEMPLATES.length)
+      ];
+      return tpl.replaceAll("{answer}", cleaned);
+    }
+    return ComedianBrain.NONWORD_FILLERS[
+      Math.floor(Math.random() * ComedianBrain.NONWORD_FILLERS.length)
+    ];
+  }
 
   private enterGenerating(answer: string): void {
     this._transition("generating");
@@ -1277,13 +1405,14 @@ export class ComedianBrain {
     this.deps.setMotion("thinking", 0.7);
     this._addLedger("answer", answer, []);
 
-    // Queue an immediate non-word filler so the user hears something right away while the API generates.
-    // These short sounds ("Mmm.", "Uh huh.") bridge the silence and set the vocal tone for the joke
-    // via ElevenLabs previous_text continuity — no extra latency.
+    // Queue an immediate filler so the user hears something right away while the API generates.
+    // Either a non-word sound ("Mmm.", "Uh huh.") or an echo of a complete answer ("Alex.",
+    // "So — Seattle.") — both bridge the silence and set the vocal tone via ElevenLabs
+    // previous_text continuity. No extra latency.
     let fillerAlreadySaid: string | undefined;
     if (!COMEDIAN_CONFIG.skipFiller && !this.fillerFiredForAnswer) {
       this.fillerFiredForAnswer = true;
-      const filler = ComedianBrain.GENERATING_FILLERS[Math.floor(Math.random() * ComedianBrain.GENERATING_FILLERS.length)];
+      const filler = this._pickFiller(answer);
       this.deps.queueSpeak(filler, "thinking", 0.6);
       this.deps.logTiming(`brain: filler — "${filler}"`);
       fillerAlreadySaid = filler;
@@ -1360,7 +1489,14 @@ export class ComedianBrain {
           this._transition("delivering");
           this.deps.setMotion("energetic", 0.8);
         }
-        this.deps.queueSpeak(joke.text, joke.motion as import("@/lib/motionStates").MotionState, joke.intensity);
+        // Streamed jokes after the first in this batch append to the same transcript paragraph
+        const appendToPrev = jokesQueued > 0;
+        this.deps.queueSpeak(
+          joke.text,
+          joke.motion as import("@/lib/motionStates").MotionState,
+          joke.intensity,
+          appendToPrev,
+        );
         if (COMEDIAN_CONFIG.singleJokeMode) this.pipelinePreviousJokes.push(joke.text);
 
         this._addLedger("joke", joke.text, []);
@@ -1408,6 +1544,7 @@ export class ComedianBrain {
             meta.callback.text,
             meta.callback.motion as import("@/lib/motionStates").MotionState,
             meta.callback.intensity,
+            jokesQueued > 0, // append to the streaming-jokes paragraph if any landed first
           );
           this._addLedger("joke", meta.callback.text, []);
           jokesQueued++;
@@ -1420,20 +1557,21 @@ export class ComedianBrain {
           return;
         }
 
-        // Bonus hopper joke — skip in singleJokeMode (pipeline handles sequencing)
-        if (!COMEDIAN_CONFIG.singleJokeMode && this.transitionCount % 4 === 0) {
-          const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
-          if (bonus) {
-            this.deps.queueSpeak(bonus.text, bonus.motion, bonus.intensity);
-            this._addLedger("joke", bonus.text, []);
-            jokesQueued += 1;
-          }
-        }
+        // Bonus hopper joke is intentionally NOT fired here — the streaming API already
+        // returns 1-2 jokes per answer (jokesPerAnswer.max=2). Adding a third joke pads
+        // the paragraph and delays the next question. The hopper still feeds vision_react
+        // and silence-fallback paths.
 
         this._fireHopperGeneration("answer", undefined, answer);
 
         // Speculatively prefetch next pipeline joke while current TTS plays
         this._prefetchPipelineJoke();
+
+        // Pre-queue next question (rephrase / contextual fetch) while jokes play.
+        // No-op when pipelining single jokes — _pipelineNextJoke handles its own pacing.
+        if (!COMEDIAN_CONFIG.singleJokeMode) {
+          this._preQueueNextQuestion();
+        }
       },
       // onError — stream failed, fall back to non-streaming
       () => {
@@ -1486,9 +1624,9 @@ export class ComedianBrain {
       queued++;
     }
 
-    // Queue all jokes
+    // Queue all jokes — same delivery batch renders as a single transcript paragraph
     for (const joke of response.jokes) {
-      this.deps.queueSpeak(joke.text, joke.motion, joke.intensity);
+      this.deps.queueSpeak(joke.text, joke.motion, joke.intensity, queued > 0);
       this._addLedger("joke", joke.text, []);
       queued++;
     }
@@ -1500,23 +1638,27 @@ export class ComedianBrain {
       return;
     }
 
-    // Bonus hopper joke — only attach when there are real jokes to accompany it
-    // Skip transitionCount=0 (first delivery) to avoid firing before the hopper is meaningfully populated
-    if (this.transitionCount > 0 && this.transitionCount % 4 === 0) {
-      const bonus = this._popHopperJoke(COMEDIAN_CONFIG.hopperMinScoreForBonus);
-      if (bonus) {
-        this.deps.queueSpeak(bonus.text, bonus.motion, bonus.intensity);
-        this._addLedger("joke", bonus.text, []);
-        queued += 1;
-      }
-    }
+    // Bonus hopper joke intentionally suppressed — see _generateAndDeliver onMeta for rationale.
 
     // Feed hopper with this context
     this._fireHopperGeneration("answer", undefined, answer);
+
+    // Pre-queue next question while jokes play (no-op in singleJokeMode pipeline path)
+    if (!COMEDIAN_CONFIG.singleJokeMode) {
+      this._preQueueNextQuestion();
+    }
   }
 
   private _onDeliveringDrained(): void {
     this.transitionCount++;
+
+    // Wrapup pending — abort pipeline/follow-up and route straight to closing line
+    if (this.pendingWrapup) {
+      this.pipelineAnswer = null;
+      this._cancelPipelinePrefetch();
+      this.enterWrapup();
+      return;
+    }
 
     // Single-joke pipeline: generate the next joke while delivering
     if (COMEDIAN_CONFIG.singleJokeMode && this.pipelineAnswer) {
@@ -1757,8 +1899,127 @@ export class ComedianBrain {
       this.rephraseAbort.abort();
       this.rephraseAbort = null;
     }
+    this._clearPreQueue();
+  }
+
+  private _clearPreQueue(): void {
     this.preQueuedQuestion = null;
-    this.preQueuedTextReady = false;
+    this.preQueuedRephrasedText = null;
+  }
+
+  /**
+   * Pick the next question while jokes are still playing so enterAskQuestion
+   * can advance without an LLM round-trip. Fires the rephrase / contextual fetch
+   * concurrently so the text is usually ready by the time we drain.
+   *
+   * Pre-queue stashes text only — never queues TTS — so vision_react interrupts
+   * during check_vision still play in the right order.
+   */
+  private _preQueueNextQuestion(): void {
+    if (this.visionOnlyMode) return;
+    if (this.preQueuedQuestion) return;
+
+    // Follow-up wins — the LLM picked the next question for us already
+    if (this.pendingFollowUp) {
+      const followUpText = this.pendingFollowUp;
+      this.pendingFollowUp = null;
+      this.followUpCount++;
+      this.preQueuedQuestion = {
+        id: "follow_up",
+        question: followUpText,
+        jokeContext: "Answer-driven follow-up question.",
+        prodLines: [
+          "I'm waiting. The audience is waiting.",
+          "Hello? Anyone home?",
+        ],
+      };
+      this.preQueuedRephrasedText = null;
+      this._fetchRephraseForPreQueue(followUpText);
+      this.deps.logTiming(`brain: pre-queue follow-up — "${followUpText.slice(0, 40)}"`);
+      return;
+    }
+
+    const shouldUseContextual = this.bankQuestionsInARow >= 1 && this.cameraAvailable;
+    if (shouldUseContextual) {
+      this.bankQuestionsInARow = 0;
+      this._preFetchContextualQuestion();
+      return;
+    }
+
+    const nextQ = this._nextValidQuestion();
+    if (!nextQ) {
+      this._preFetchContextualQuestion();
+      return;
+    }
+    this.bankQuestionsInARow++;
+    this.preQueuedQuestion = nextQ;
+    this.preQueuedRephrasedText = null;
+    this._fetchRephraseForPreQueue(this._pickQuestionText(nextQ));
+    this.deps.logTiming(`brain: pre-queue bank question — "${nextQ.id}"`);
+  }
+
+  private _fetchRephraseForPreQueue(questionText: string): void {
+    const lastJoke = this.ledger.filter((e) => e.type === "joke").at(-1)?.text ?? "";
+    const targetSlot = this.preQueuedQuestion;
+
+    fetch("/api/rephrase-question", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: questionText,
+        model: this.deps.getRoastModel(),
+        persona: this.deps.getPersona(),
+        burnIntensity: this.deps.getBurnIntensity(),
+        knownFacts: this._getThrowbackContext(),
+        previousLine: lastJoke,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d: { rephrased?: string }) => d.rephrased?.trim() || null)
+      .catch(() => null)
+      .then((rephrased) => {
+        // Slot may have been cleared (cancel/consume) or replaced — bail
+        if (this.preQueuedQuestion !== targetSlot) return;
+        if (rephrased) {
+          this.preQueuedRephrasedText = rephrased;
+          this.deps.logTiming(`brain: pre-queue rephrase ready — "${rephrased.slice(0, 60)}"`);
+        }
+      });
+  }
+
+  private _preFetchContextualQuestion(): void {
+    this.deps.logTiming("brain: pre-fetching contextual question");
+    const observations = this.deps.getObservations();
+    const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
+
+    fetch("/api/generate-question", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: this.deps.getRoastModel(),
+        persona: this.deps.getPersona(),
+        observations,
+        setting: this.deps.getVisionSetting(),
+        knownFacts: this._getThrowbackContext(),
+        conversationSoFar: this._getLedgerContext(),
+        imageBase64: frame,
+      }),
+    })
+      .then((r) => r.json())
+      .then((data: { question: string; jokeContext: string }) => {
+        if (!data?.question) return;
+        if (this.preQueuedQuestion) return; // raced — keep whichever landed first
+        this.preQueuedQuestion = {
+          id: `generated_${Date.now()}`,
+          question: data.question,
+          jokeContext: data.jokeContext,
+          prodLines: ["Come on, I'm waiting.", "I asked you a question."],
+        };
+        // Contextual question is freshly written for this moment — skip the rephrase pass.
+        this.preQueuedRephrasedText = data.question;
+        this.deps.logTiming(`brain: pre-fetched contextual — "${data.question.slice(0, 40)}"`);
+      })
+      .catch(() => {});
   }
 
   /** Speculatively generate the next pipeline joke while the current one plays. */
@@ -1835,7 +2096,29 @@ export class ComedianBrain {
   }
 
   private enterCheckVision(): void {
+    if (this.pendingWrapup) {
+      this.enterWrapup();
+      return;
+    }
     this._transition("check_vision");
+
+    // If we already have the next question lined up (follow-up or pre-queued),
+    // skip vision_react and ask it. Avoids inserting a 5-7s vision joke between
+    // the answer's roast and the next question. Vision interrupt still fires
+    // when there's nothing queued — see refresh of previousObservations below.
+    const hasQueuedNext = !!this.pendingFollowUp || !!this.preQueuedQuestion;
+    if (hasQueuedNext) {
+      // Refresh observation baseline so the next genuine vision_react isn't
+      // triggered by changes we deliberately skipped.
+      const current = this.deps.getObservations();
+      if (this.cameraAvailable && current.length > 0) {
+        this.previousObservations = [...current];
+      }
+      this.pendingVisionInterrupt = null;
+      this.deps.logTiming("brain: skipping vision_react — next question already queued");
+      this.enterAskQuestion();
+      return;
+    }
 
     // Check for proactively queued vision interrupt first
     if (this.pendingVisionInterrupt) {
@@ -1867,6 +2150,75 @@ export class ComedianBrain {
       return;
     }
     this.enterAskQuestion();
+  }
+
+  private static readonly WRAPUP_FALLBACK = "And on that note, we're done here. Goodnight.";
+  private static readonly WRAPUP_GENERATION_TIMEOUT_MS = 6000;
+
+  private enterWrapup(): void {
+    this.pendingWrapup = false;
+    this._clearTimers();
+    this._cancelSpeculative();
+    this._cancelHopper();
+    this._cancelPipelinePrefetch();
+    this._cancelRephrase();
+    this.preQueuedQuestion = null;
+    this.preQueuedRephrasedText = null;
+    this.pendingFollowUp = null;
+    this.pipelinePrefetch = null;
+    this._transition("wrapup");
+    this.deps.setMotion("smug", 0.8);
+
+    const knownFacts = this._getThrowbackContext();
+    const conversation = this._getLedgerContext();
+    const frame = this.cameraAvailable ? this.deps.captureFrame() : undefined;
+
+    this.deps.logTiming("brain: → wrapup — generating closing line");
+
+    let resolved = false;
+    const queueClosing = (text: string, motion: MotionState = "smug", intensity = 0.8): void => {
+      if (resolved || this.state !== "wrapup") return;
+      resolved = true;
+      this.deps.queueSpeak(text, motion, intensity);
+      this._addLedger("joke", text, []);
+    };
+
+    // Safety net: if the LLM hangs, queue the fallback so the session can still end.
+    const timeout = setTimeout(() => {
+      if (resolved) return;
+      this.deps.logTiming("brain: wrapup generation timeout — using fallback");
+      queueClosing(ComedianBrain.WRAPUP_FALLBACK);
+    }, ComedianBrain.WRAPUP_GENERATION_TIMEOUT_MS);
+
+    this._generateJoke({
+      context: "wrapup",
+      knownFacts,
+      conversationSoFar: conversation,
+      observations: this.deps.getObservations(),
+      imageBase64: frame,
+      maxJokes: 1,
+    }).then((response) => {
+      clearTimeout(timeout);
+      const closing = response?.jokes?.[0];
+      if (closing && closing.text.trim()) {
+        this.deps.logTiming(`brain: wrapup closing — "${closing.text.slice(0, 60)}"`);
+        queueClosing(closing.text, closing.motion, closing.intensity);
+      } else {
+        this.deps.logTiming("brain: wrapup generation empty — using fallback");
+        queueClosing(ComedianBrain.WRAPUP_FALLBACK);
+      }
+    }).catch(() => {
+      clearTimeout(timeout);
+      this.deps.logTiming("brain: wrapup generation error — using fallback");
+      queueClosing(ComedianBrain.WRAPUP_FALLBACK);
+    });
+  }
+
+  private _fireSessionEnd(): void {
+    if (this.wrapupSessionEnded) return;
+    this.wrapupSessionEnded = true;
+    this.deps.logTiming("brain: wrapup TTS drained — signaling session end");
+    this.deps.onSessionEnd?.();
   }
 
   private enterVisionReact(changes: string[], currentObs: string[], oldObs: string[]): void {
@@ -2030,6 +2382,25 @@ export class ComedianBrain {
   // ─── Passive reaction handling ────────────────────────────────────────────────
 
   private static CRITIQUE_RE = /not\s+funny|wasn'?t\s+funny|isn'?t\s+funny|too\s+(mean|harsh|far|rude)|stop\s+(that|it)|offensive|inappropriate|don'?t\s+(joke|talk)\s+about|that\s+(hurt|sucked|was\s+bad)/i;
+  private static LAUGHTER_RE = /^(ha+|he+|haha+|hehe+|lo+l|hahaha+|heh)\b/i;
+  private static TINY_REACTION_RE = /^(yeah|yep|yup|right|ok|okay|sure|wow|oh|ah|huh|mm+|hmm+|mhm)\b[\s.!?]*$/i;
+
+  /**
+   * Decide whether incoming user speech during `delivering` should interrupt the joke.
+   * Conservative: laughter, tiny acknowledgments ("yeah", "wow"), and STT echoes of the
+   * puppet's own line stay passive. Substantive speech (3+ words, a correction cue, or a
+   * critique) interrupts so the user can correct a mishearing.
+   */
+  private _shouldInterruptDelivering(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    if (this._answerEchoesRecentRoast(trimmed)) return false;
+    if (ComedianBrain.LAUGHTER_RE.test(trimmed)) return false;
+    if (ComedianBrain.TINY_REACTION_RE.test(trimmed)) return false;
+    if (ComedianBrain._hasCorrectionCue(trimmed)) return true;
+    if (ComedianBrain.CRITIQUE_RE.test(trimmed)) return true;
+    return wordCount(trimmed) >= 3;
+  }
 
   private _handleReactionText(text: string): void {
     const lower = text.toLowerCase();
@@ -2315,7 +2686,7 @@ export class ComedianBrain {
 
   private async _generateJoke(
     params: {
-      context: "greeting" | "vision_opening" | "answer_roast" | "vision_react" | "hopper";
+      context: "greeting" | "vision_opening" | "answer_roast" | "vision_react" | "hopper" | "wrapup";
       /** Override the roast model for this request (e.g. Gemini Flash for vision-reactive jokes). */
       model?: string;
       question?: string;

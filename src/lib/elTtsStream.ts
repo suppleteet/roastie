@@ -27,7 +27,7 @@ export interface ElVoiceSettings {
 const DEFAULT_VOICE_SETTINGS: ElVoiceSettings = {
   stability: 0.72,
   similarity_boost: 0.7,
-  style: 0.2,
+  style: 1,
   speed: 0.88,
   use_speaker_boost: true,
 };
@@ -83,7 +83,11 @@ export function streamElTts({
         voice_settings: vsRest,
         xi_api_key: apiKey,
         generation_config: {
-          chunk_length_schedule: [120, 160, 250, 290],
+          // Larger first chunks → ElevenLabs has more prosody context up front,
+          // so the opening words don't rush before settling to natural pace.
+          // Slight first-byte latency cost vs the old [120,160,250,290], but
+          // pacing matters more than ms when the puppet is mid-roast.
+          chunk_length_schedule: [220, 260, 290, 290],
           ...(speed !== undefined && speed !== 1.0 ? { speed } : {}),
         },
         ...(previousText ? { previous_text: previousText } : {}),

@@ -47,6 +47,7 @@ function MainApp() {
   const setActivePersona = useSessionStore((s) => s.setActivePersona);
   const hasSpokenThisSession = useSessionStore((s) => s.hasSpokenThisSession);
   const puppetRevealed = useSessionStore((s) => s.puppetRevealed);
+  const isEnding = useSessionStore((s) => s.isEnding);
   const lastVisionCallTs = useSessionStore((s) => s.lastVisionCallTs);
   const brainState = useSessionStore((s) => s.brainState);
   const IS_DEV = process.env.NODE_ENV !== "production";
@@ -210,10 +211,15 @@ function MainApp() {
             startPreRoastGreetingWarmup(webcamStream);
             setPhase("roasting", "PERMISSIONS_GRANTED");
           })
-          .catch(() => {
-            startPreRoastGreetingWarmup(webcamStream);
-            setPhase("roasting", "PERMISSIONS_GRANTED");
-          }); // proceed without mic if audio denied
+          .catch((err) => {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error("Microphone denied:", message);
+            logTiming(`mic: getUserMedia(audio) failed — ${message}`);
+            setError(
+              `Microphone access failed: ${message}. Please allow mic access in browser settings and retry.`,
+            );
+            setPhase("idle", "PERMISSIONS_DENIED");
+          });
       } else {
         setPhase("roasting", "PERMISSIONS_GRANTED");
       }
@@ -301,6 +307,9 @@ function MainApp() {
     if (phase === "roasting") {
       const now = Date.now();
       setSessionStartTs(now);
+      // Reveal puppet immediately — fade-in starts now, well before LLM/TTS
+      // (LLM cold start can be 7-15s; we don't want a black screen during it).
+      useSessionStore.getState().setPuppetRevealed(true);
       // NOTE: Do NOT clearTimingLog() here — startLiveSession() already logged
       // prefetch entries before this effect runs. Clearing would wipe them.
       logTiming("session: roasting started");
@@ -435,7 +444,7 @@ function MainApp() {
       {showPuppet && (
         <div className="relative w-full max-w-[560px] aspect-square">
           {/* Dark overlay — fades out over 2s when first joke text is ready (before TTS audio) */}
-          <div className={`absolute inset-0 bg-black z-10 pointer-events-none transition-opacity duration-[2000ms] ${puppetRevealed ? "opacity-0" : "opacity-100"}`}>
+          <div className={`absolute inset-0 bg-black z-10 pointer-events-none transition-opacity ${isEnding ? "duration-[600ms]" : "duration-[2000ms]"} ${puppetRevealed ? "opacity-0" : "opacity-100"}`}>
             {phase === "roasting" && !puppetRevealed && (
               <div className="flex items-center justify-center h-full">
                 <div className="flex flex-col items-center gap-3">

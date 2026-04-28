@@ -26,4 +26,5 @@ export const STATE_CONFIG: Record<BrainState, StateDefinition> = {
   redirecting:  { next: "wait_answer",   micMode: "passive",   canSkipTo: null },
   check_vision: { next: "ask_question",  micMode: "passive",   canSkipTo: null },
   vision_react: { next: "ask_question",  micMode: "passive",   canSkipTo: null },
+  wrapup:       { next: "wrapup",        micMode: "off",       canSkipTo: null },
 };

@@ -56,6 +56,7 @@ export default function LiveSessionController({
   const webcamIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const visionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const rotateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wrapupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userSpeakingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const laughDecayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const smileDecayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -143,13 +144,13 @@ export default function LiveSessionController({
 
   // ─── Brain helpers ────────────────────────────────────────────────────────────
 
-  function queueSpeak(text: string, motion?: MotionState, intensity?: number): void {
+  function queueSpeak(text: string, motion?: MotionState, intensity?: number, appendToPrev?: boolean): void {
     if (!text.trim() || !isRunningRef.current) return;
     // Reveal puppet on first queued speech — TTS latency ≈ fade duration
     if (!useSessionStore.getState().puppetRevealed) {
       useSessionStore.getState().setPuppetRevealed(true);
     }
-    useSessionStore.getState().pushTranscriptEntry("puppet", text.trim());
+    useSessionStore.getState().pushTranscriptEntry("puppet", text.trim(), { append: appendToPrev });
     wasDrainedRef.current = false; // reset edge so drain detection fires when this plays through
     const gen = ttsGenerationRef.current;
 
@@ -285,7 +286,10 @@ export default function LiveSessionController({
 
   function startDrainPolling(): void {
     stopDrainPolling();
-    wasDrainedRef.current = false;
+    // Initialize "drained" so the first poll doesn't fire onTtsQueueDrained
+    // before any audio has been queued. The first real drain edge fires after
+    // queueSpeak resets this to false and audio actually plays through.
+    wasDrainedRef.current = true;
     earlyListenFiredRef.current = false;
 
     function poll() {
@@ -653,7 +657,33 @@ export default function LiveSessionController({
       ? (window as unknown as Record<string, unknown>).__SESSION_ROTATE_MS__
       : undefined;
     const rotateMs = typeof rotateMsOverride === "number" ? rotateMsOverride : SESSION_ROTATE_MS;
+
+    // Skip rotation if the wrapup window is imminent — opening a new WebSocket only to
+    // tear it down moments later wastes a connect and risks racing the wrapup TTS drain.
+    if (kickoffTimeRef.current !== null) {
+      const elapsed = Date.now() - kickoffTimeRef.current;
+      if (elapsed + rotateMs >= COMEDIAN_CONFIG.wrapupGuardMs) {
+        useSessionStore.getState().logTiming(
+          `live: skipping rotation — wrapup imminent (elapsed=${(elapsed / 1000).toFixed(1)}s)`,
+        );
+        return;
+      }
+    }
     rotateTimerRef.current = setTimeout(rotateSession, rotateMs);
+  }
+
+  function scheduleWrapup() {
+    if (wrapupTimerRef.current) clearTimeout(wrapupTimerRef.current);
+    const ms = COMEDIAN_CONFIG.wrapupAfterMs;
+    if (ms <= 0) return;
+    wrapupTimerRef.current = setTimeout(() => {
+      wrapupTimerRef.current = null;
+      if (!isRunningRef.current) return;
+      useSessionStore.getState().logTiming(
+        `live: wrapup timer fired (${(ms / 1000).toFixed(0)}s elapsed) — requesting brain wrapup`,
+      );
+      brainRef.current?.requestWrapup();
+    }, ms);
   }
 
   // ─── Audio stream for recording ────────────────────────────────────────────────
@@ -838,6 +868,28 @@ export default function LiveSessionController({
           }),
         }).catch(() => {});
       },
+      onSessionEnd: () => {
+        if (!isRunningRef.current) return;
+        const store = useSessionStore.getState();
+        const pauseMs = COMEDIAN_CONFIG.wrapupPostLinePauseMs;
+        const fadeMs = 600;
+        store.logTiming(
+          `live: wrapup complete — holding ${pauseMs}ms before fade, then stopping`,
+        );
+
+        // Beat of silence: hold the puppet on stage for a few seconds after the goodbye,
+        // then quick fade to black, then phase transition.
+        setTimeout(() => {
+          if (!isRunningRef.current) return;
+          useSessionStore.getState().setIsEnding(true);
+          useSessionStore.getState().setPuppetRevealed(false);
+          setTimeout(() => {
+            if (useSessionStore.getState().phase === "roasting") {
+              useSessionStore.getState().setPhase("stopped", "SESSION_TIMEOUT");
+            }
+          }, fadeMs + 50);
+        }, pauseMs);
+      },
     });
 
     const connectSpanId = useSessionStore.getState().beginSpan("session", "connect");
@@ -870,7 +922,6 @@ export default function LiveSessionController({
         .catch(() => { /* stateless fallback — no action needed */ });
 
       const session = await sessionPromise;
-      await micPromise;
 
       // Guard: stopLiveSession() may have run while we were awaiting (e.g. user
       // clicked Stop, then immediately Start Session before the old stop finished).
@@ -882,43 +933,53 @@ export default function LiveSessionController({
 
       sessionRef.current = session;
       useSessionStore.getState().endSpan(connectSpanId);
-      useSessionStore.getState().logTiming("live: session + mic ready");
-
-      // Start Silero VAD on the mic stream for fast end-of-speech detection
-      const micStream = mic.getStream();
-      if (micStream) {
-        vad.start(micStream)
-          .then(() => {
-            brainRef.current?.setVadAvailable(true);
-          })
-          .catch((e) => {
-            brainRef.current?.setVadAvailable(false);
-            console.warn("[live] VAD start failed (falling back to silence timer):", e);
-          });
-      } else {
-        brainRef.current?.setVadAvailable(false);
-      }
+      useSessionStore.getState().logTiming("live: session ready (mic init in background)");
 
       kickoffTimeRef.current = Date.now();
       useSessionStore.getState().setTimeToFirstSpeechMs(null);
       useSessionStore.getState().setHasSpokenThisSession(false);
-      useSessionStore.getState().setPuppetRevealed(false);
+      // puppetRevealed is set by page.tsx when phase becomes "roasting" — don't reset
+      // here or the puppet would flash off mid-mount. Stop/restart paths reset elsewhere.
+      useSessionStore.getState().setIsEnding(false);
 
       // Check camera availability
       const frame = webcamRef.current?.captureFrame();
       if (!frame) brainRef.current.setCameraAvailable(false);
 
-      // Start recording immediately (at fade-in, before first speech)
+      // Start recording with TTS-audio destination only — mic is added when ready.
+      // playback.getDestinationStream() returns the shared destination; later
+      // addInputToRecording() routes mic into the same node, so the recording
+      // captures it without re-starting.
       if (!mockMode && videoRecorderRef.current && compositorStream && isRunningRef.current) {
-        videoRecorderRef.current.start(compositorStream, getRecordingAudioStream());
-        useSessionStore.getState().logTiming("live: recording started at kickoff");
+        videoRecorderRef.current.start(compositorStream, playback.getDestinationStream());
+        useSessionStore.getState().logTiming("live: recording started (TTS-only, mic to follow)");
       }
 
-      // Start the comedy show
+      // Start the comedy show NOW — don't wait for mic to finish initializing.
+      // Greeting + first question are TTS-only; mic isn't needed until wait_answer
+      // (~10s later). Pulls TTFS down by the mic init time (~3s).
       startDrainPolling();
       brainRef.current.start();
       kickTownFlavorFetch(); // overlaps first-joke TTS when geo already resolved
       useSessionStore.getState().logTiming("live: brain started");
+
+      // Mic + VAD setup in background — won't block first speech.
+      micPromise.then(() => {
+        if (!isRunningRef.current || !brainRef.current) return;
+        useSessionStore.getState().logTiming("live: mic ready");
+        const micStream = mic.getStream();
+        if (micStream) {
+          micRecordingDisconnectRef.current = playback.addInputToRecording(micStream);
+          vad.start(micStream)
+            .then(() => brainRef.current?.setVadAvailable(true))
+            .catch((e) => {
+              brainRef.current?.setVadAvailable(false);
+              console.warn("[live] VAD start failed (falling back to silence timer):", e);
+            });
+        } else {
+          brainRef.current?.setVadAvailable(false);
+        }
+      });
 
       // Send first webcam frame to Gemini for VAD context
       if (frame) {
@@ -928,6 +989,7 @@ export default function LiveSessionController({
 
       startWebcamSend();
       scheduleRotation();
+      scheduleWrapup();
       startVisionSend();
     } catch (err) {
       console.error("[live] Failed to start:", err);
@@ -960,6 +1022,7 @@ export default function LiveSessionController({
     stopWebcamSend();
     stopVisionSend();
     if (rotateTimerRef.current) clearTimeout(rotateTimerRef.current);
+    if (wrapupTimerRef.current) { clearTimeout(wrapupTimerRef.current); wrapupTimerRef.current = null; }
 
     cancelSpeech();
     micRecordingDisconnectRef.current?.();
@@ -1043,6 +1106,7 @@ export default function LiveSessionController({
       stopWebcamSend();
       stopVisionSend();
       if (rotateTimerRef.current) clearTimeout(rotateTimerRef.current);
+      if (wrapupTimerRef.current) clearTimeout(wrapupTimerRef.current);
       if (userSpeakingTimerRef.current) clearTimeout(userSpeakingTimerRef.current);
       brainRef.current?.stop();
       vad.stop();

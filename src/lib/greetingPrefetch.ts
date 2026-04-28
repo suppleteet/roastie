@@ -50,20 +50,40 @@ export async function prefetchParallelVisionAndGreeting(
   greetingFrame: string | undefined,
   snapshot: GreetingPrefetchSnapshot,
 ): Promise<JokeResponse | null> {
-  const visionPromise = greetingFrame
-    ? postJsonWithRetry<{ observations?: string[]; setting?: string | null }>(
-        "/api/analyze",
-        {
-          imageBase64: greetingFrame,
-          burnIntensity: snapshot.burnIntensity,
-          mode: "vision",
-          persona: snapshot.activePersona,
-        },
-        { retries: 2, timeoutMs: 5000 },
-      )
-    : Promise.resolve(null);
+  // Vision runs in parallel and updates the store independently — never blocks the joke.
+  // 6s → 12s timeout: Gemini Flash with image cold-start can take 7-9s; aborting at 5s
+  // forces a retry that costs more than the original wait.
+  if (greetingFrame) {
+    postJsonWithRetry<{ observations?: string[]; setting?: string | null }>(
+      "/api/analyze",
+      {
+        imageBase64: greetingFrame,
+        burnIntensity: snapshot.burnIntensity,
+        mode: "vision",
+        persona: snapshot.activePersona,
+      },
+      { retries: 1, timeoutMs: 12000 },
+    ).then((visionData) => {
+      if (!visionData) return;
+      const observations = visionData.observations ?? [];
+      const setting = visionData.setting ?? null;
+      if (observations.length) {
+        useSessionStore.getState().setObservations(observations);
+        useSessionStore.getState().logTiming(
+          `live: greeting vision — ${observations.length} obs — ${observations.join("; ").slice(0, 80)}`,
+        );
+      } else {
+        useSessionStore.getState().logTiming("live: greeting vision — 0 obs");
+      }
+      if (setting) {
+        useSessionStore.getState().setVisionSetting(setting);
+      }
+    });
+  }
 
-  const jokePromise = postJsonWithRetry<JokeResponse>(
+  // Joke timeout 6s → 15s: same cold-start reality. One retry is enough — beyond that
+  // the brain falls back to its own canned greeting line, which is acceptable.
+  return postJsonWithRetry<JokeResponse>(
     "/api/generate-joke",
     {
       context: "greeting",
@@ -74,26 +94,6 @@ export async function prefetchParallelVisionAndGreeting(
       observations: [],
       imageBase64: greetingFrame,
     },
-    { retries: 2, timeoutMs: 6000 },
+    { retries: 1, timeoutMs: 15000 },
   );
-
-  const [visionData, jokeResp] = await Promise.all([visionPromise, jokePromise]);
-
-  if (visionData) {
-    const observations = visionData.observations ?? [];
-    const setting = visionData.setting ?? null;
-    if (observations.length) {
-      useSessionStore.getState().setObservations(observations);
-      useSessionStore.getState().logTiming(
-        `live: greeting vision — ${observations.length} obs — ${observations.join("; ").slice(0, 80)}`,
-      );
-    } else {
-      useSessionStore.getState().logTiming("live: greeting vision — 0 obs");
-    }
-    if (setting) {
-      useSessionStore.getState().setVisionSetting(setting);
-    }
-  }
-
-  return jokeResp;
 }

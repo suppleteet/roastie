@@ -29,7 +29,7 @@ export interface VoiceSettings {
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   stability: 0.72,
   similarity_boost: 0.7,
-  style: 0.2,
+  style: 1,
   speed: 0.88,
   use_speaker_boost: true,
 };
@@ -113,6 +113,7 @@ interface SessionState {
   timeToFirstSpeechMs: number | null;
   hasSpokenThisSession: boolean;
   puppetRevealed: boolean; // true once first joke text is ready (before TTS audio)
+  isEnding: boolean; // true while session is fading out — switches the puppet overlay to a fast fade-out duration
   lastVisionCallTs: number | null;
 
   // Comedian Brain state (conversation mode)
@@ -126,8 +127,10 @@ interface SessionState {
   smileFrames: number;      // vision frames where smile was detected
   totalVisionFrames: number; // total vision frames this session
 
-  // Transcript history for debug panel
-  transcriptHistory: { role: "user" | "puppet"; text: string; ts: number }[];
+  // Transcript history for debug panel.
+  // groupId clusters jokes from the same delivery batch — UI renders them as one
+  // paragraph while keeping per-joke ratings.
+  transcriptHistory: { role: "user" | "puppet"; text: string; ts: number; groupId: string }[];
   jokeRatings: Record<number, "up" | "down">; // keyed by transcript entry ts
 
   // Session timer — set when phase enters "roasting"
@@ -175,6 +178,7 @@ interface SessionState {
   setTimeToFirstSpeechMs: (ms: number | null) => void;
   setHasSpokenThisSession: (spoken: boolean) => void;
   setPuppetRevealed: (revealed: boolean) => void;
+  setIsEnding: (isEnding: boolean) => void;
   setLastVisionCallTs: (ts: number | null) => void;
   setBrainState: (state: BrainState | null) => void;
   setCurrentQuestion: (q: string | null) => void;
@@ -184,7 +188,7 @@ interface SessionState {
   setIsUserSmiling: (smiling: boolean) => void;
   incrementLaughCount: () => void;
   recordVisionFrame: (smiling: boolean) => void;
-  pushTranscriptEntry: (role: "user" | "puppet", text: string) => void;
+  pushTranscriptEntry: (role: "user" | "puppet", text: string, opts?: { append?: boolean }) => void;
   timelineSpans: TimelineSpan[];
   beginSpan: (row: TimelineRow, label: string, color?: string) => string;
   endSpan: (id: string) => void;
@@ -222,6 +226,7 @@ const initialState = {
   timeToFirstSpeechMs: null as number | null,
   hasSpokenThisSession: false,
   puppetRevealed: false,
+  isEnding: false,
   lastVisionCallTs: null as number | null,
   brainState: null as BrainState | null,
   currentQuestion: null as string | null,
@@ -232,7 +237,7 @@ const initialState = {
   laughCount: 0,
   smileFrames: 0,
   totalVisionFrames: 0,
-  transcriptHistory: [] as { role: "user" | "puppet"; text: string; ts: number }[],
+  transcriptHistory: [] as { role: "user" | "puppet"; text: string; ts: number; groupId: string }[],
   jokeRatings: {} as Record<number, "up" | "down">,
   timelineSpans: [] as TimelineSpan[],
   sessionStartTs: null as number | null,
@@ -293,6 +298,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setTimeToFirstSpeechMs: (timeToFirstSpeechMs) => set({ timeToFirstSpeechMs }),
   setHasSpokenThisSession: (hasSpokenThisSession) => set({ hasSpokenThisSession }),
   setPuppetRevealed: (puppetRevealed) => set({ puppetRevealed }),
+  setIsEnding: (isEnding) => set({ isEnding }),
   setLastVisionCallTs: (lastVisionCallTs) => set({ lastVisionCallTs }),
   setBrainState: (brainState) => set({ brainState }),
   setCurrentQuestion: (currentQuestion) => set({ currentQuestion }),
@@ -305,9 +311,15 @@ export const useSessionStore = create<SessionState>((set) => ({
     totalVisionFrames: s.totalVisionFrames + 1,
     smileFrames: s.smileFrames + (smiling ? 1 : 0),
   })),
-  pushTranscriptEntry: (role, text) =>
+  pushTranscriptEntry: (role, text, opts) =>
     set((s) => {
-      const next = [...s.transcriptHistory.slice(-199), { role, text, ts: Date.now() }];
+      const last = s.transcriptHistory[s.transcriptHistory.length - 1];
+      const ts = Date.now();
+      const groupId =
+        opts?.append && last && last.role === role
+          ? last.groupId
+          : `g-${ts}-${Math.random().toString(36).slice(2, 8)}`;
+      const next = [...s.transcriptHistory.slice(-199), { role, text, ts, groupId }];
       try { localStorage.setItem("roastie-transcript", JSON.stringify(next)); } catch { /* ignore */ }
       return { transcriptHistory: next };
     }),

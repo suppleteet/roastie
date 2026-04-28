@@ -26,4 +26,5 @@ export const BRAIN_MOTION_DEFAULTS: Record<BrainState, BrainMotionDefault> = {
   redirecting:   { motion: "smug",           intensity: 0.7 },
   check_vision:  { motion: "thinking",       intensity: 0.5 },
   vision_react:  { motion: "shocked",        intensity: 0.8 },
+  wrapup:        { motion: "idle",           intensity: 0.3 },
 };

@@ -32,6 +32,11 @@ const defaults = {
   // Greeting pool
   generatedGreetingCount: 4,  // how many AI-generated greetings to pre-generate
 
+  // Session length
+  wrapupAfterMs: 180_000,      // after this elapsed, brain routes to wrapup at next ask_question
+  wrapupGuardMs: 170_000,      // skip session rotation if elapsed exceeds this — wrapup is imminent
+  wrapupPostLinePauseMs: 2500, // dead air after the closing line finishes — comedian "exits the stage" before fade
+
   // Dev voice notes (gesture-triggered)
   devNotesEnabled: false,      // thumbs-down pauses brain, starts recording; thumbs-up resumes
   devNoteTimeoutMs: 60_000,    // auto-resume after 60s if no thumbs-up
@@ -50,7 +55,7 @@ const defaults = {
   skipPreGeneration: false,   // speculative pre-generation fires after 1st word in wait_answer
   skipFiller: false,          // non-word filler ("Mmm.", "Uh huh.") bridges silence before joke
   skipScriptedLines: false,   // skip ALL canned speech (bridges, prods, confirm templates, reject templates)
-  singleJokeMode: true,      // generate 1 joke at a time, pipeline next during delivery
+  singleJokeMode: false,     // false: 1-2 jokes stream from one API call; true: pipeline 1 joke at a time
 };
 
 const windowOverride =

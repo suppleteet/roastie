@@ -168,6 +168,10 @@ npm test              # vitest run (single pass)
 npm run test:watch    # vitest watch mode
 npm run test:coverage
 npm run test:e2e      # Playwright (requires dev server on :3000)
+
+# Opt-in: integration roast-run that hits real LLM APIs (costs $).
+# Catches prompt-rule violations and repeat-question / flow bugs that mocks miss.
+RUN_INTEGRATION_TEST=1 npx playwright test e2e/integration-roast-run.spec.ts
 ```
 
 ## Path Alias

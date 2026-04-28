@@ -13,7 +13,8 @@ export type JokeContext =
   | "vision_opening"
   | "answer_roast"
   | "vision_react"
-  | "hopper";
+  | "hopper"
+  | "wrapup";
 
 export interface JokeItem {
   text: string;
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
 
     if (session) {
       // ── Multi-turn path: persona is in the session's system prompt ──
-      const taskPreamble = getContextInstructions(body.context ?? "hopper");
+      const taskPreamble = getContextInstructions(body.context ?? "hopper", session.contentMode);
       const userParts: UserPart[] = [];
       userParts.push({ text: buildUserText(body, taskPreamble) });
       if (body.imageBase64) {

@@ -26,13 +26,12 @@ export interface ComedyQuestion {
   confirmTemplates?: string[];
 }
 
-/** Absurdist “mis-parse” beats after repeating what we think we heard — silence = roll with it. */
+/** Short skeptical pause beats after the confirm echo — gives the user a beat to correct, silence = roll with it. */
 export const CONFIRM_TAIL_FILLERS = [
-  "Fart? Hmm.",
-  "Part? Hmm.",
-  "Cart? Hmm.",
-  "Heart? Come on. Hmm.",
-  "Sharp? Hmm.",
+  "Hmm.",
+  "Mmkay.",
+  "Right?",
+  "Got it.",
 ];
 
 /** Default echo lines only — puppet repeats STT; tail filler queues next (see CONFIRM_TAIL_FILLERS). */

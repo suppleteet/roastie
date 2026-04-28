@@ -1,7 +1,9 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useSessionStore, DEFAULT_VOICE_SETTINGS } from "@/store/useSessionStore";
 import type { VoiceSettings } from "@/store/useSessionStore";
+
+type TranscriptEntry = ReturnType<typeof useSessionStore.getState>["transcriptHistory"][number];
 
 function relTime(ts: number, startTs: number | null): string {
   if (startTs === null) return "--";
@@ -37,6 +39,20 @@ export default function DebugTranscript() {
   const setVoiceSettings = useSessionStore((s) => s.setVoiceSettings);
   const burnIntensity = useSessionStore((s) => s.burnIntensity);
   const setBurnIntensity = useSessionStore((s) => s.setBurnIntensity);
+
+  // Group consecutive same-role same-groupId entries — one paragraph per delivery batch.
+  const groupedTranscript = useMemo(() => {
+    const groups: TranscriptEntry[][] = [];
+    for (const entry of transcriptHistory) {
+      const last = groups[groups.length - 1];
+      if (last && last[0].role === entry.role && last[0].groupId === entry.groupId) {
+        last.push(entry);
+      } else {
+        groups.push([entry]);
+      }
+    }
+    return groups;
+  }, [transcriptHistory]);
 
   // Auto-scroll to bottom on new entries
   useEffect(() => {
@@ -126,41 +142,55 @@ export default function DebugTranscript() {
           <div className="max-h-[50vh] overflow-y-auto p-2 font-mono text-[10px] leading-relaxed">
             {tab === "transcript" && (
               <>
-                {transcriptHistory.length === 0 ? (
+                {groupedTranscript.length === 0 ? (
                   <div className="text-white/20 italic">No transcript yet</div>
                 ) : (
-                  transcriptHistory.map((entry, i) => {
-                    const isUser = entry.role === "user";
-                    const rating = jokeRatings[entry.ts];
+                  groupedTranscript.map((group) => {
+                    const head = group[0];
+                    const isUser = head.role === "user";
+                    const paragraph = group.map((e) => e.text).join(" ");
                     return (
-                      <div key={i} className={`mb-0.5 flex items-start gap-1 ${isUser ? "text-cyan-300/80" : "text-orange-300/80"}`}>
+                      <div
+                        key={head.groupId}
+                        className={`mb-0.5 flex items-start gap-1 ${isUser ? "text-cyan-300/80" : "text-orange-300/80"}`}
+                        data-testid="transcript-group"
+                        data-group-id={head.groupId}
+                      >
                         <div className="flex-1 min-w-0">
-                          <span className="text-white/20">{relTime(entry.ts, sessionStartTs)}</span>{" "}
+                          <span className="text-white/20">{relTime(head.ts, sessionStartTs)}</span>{" "}
                           <span className={`font-bold ${isUser ? "text-cyan-400" : "text-orange-400"}`}>
                             {isUser ? "YOU" : "🎭"}
                           </span>{" "}
-                          {entry.text}
+                          {paragraph}
                         </div>
                         {!isUser && (
-                          <span className="flex-shrink-0 flex gap-px mt-px">
-                            <button
-                              onClick={() => rateJoke(entry.ts, "up")}
-                              className={`px-0.5 rounded text-[9px] leading-none transition-colors ${
-                                rating === "up"
-                                  ? "text-green-400 bg-green-400/20"
-                                  : "text-white/20 hover:text-green-400/70"
-                              }`}
-                              title="Good joke"
-                            >▲</button>
-                            <button
-                              onClick={() => rateJoke(entry.ts, "down")}
-                              className={`px-0.5 rounded text-[9px] leading-none transition-colors ${
-                                rating === "down"
-                                  ? "text-red-400 bg-red-400/20"
-                                  : "text-white/20 hover:text-red-400/70"
-                              }`}
-                              title="Bad joke"
-                            >▼</button>
+                          <span className="flex-shrink-0 flex flex-col gap-px mt-px">
+                            {group.map((entry, i) => {
+                              const rating = jokeRatings[entry.ts];
+                              const titleHint = group.length > 1 ? ` (joke ${i + 1})` : "";
+                              return (
+                                <span key={entry.ts} className="flex gap-px">
+                                  <button
+                                    onClick={() => rateJoke(entry.ts, "up")}
+                                    className={`px-0.5 rounded text-[9px] leading-none transition-colors ${
+                                      rating === "up"
+                                        ? "text-green-400 bg-green-400/20"
+                                        : "text-white/20 hover:text-green-400/70"
+                                    }`}
+                                    title={`Good joke${titleHint}`}
+                                  >▲</button>
+                                  <button
+                                    onClick={() => rateJoke(entry.ts, "down")}
+                                    className={`px-0.5 rounded text-[9px] leading-none transition-colors ${
+                                      rating === "down"
+                                        ? "text-red-400 bg-red-400/20"
+                                        : "text-white/20 hover:text-red-400/70"
+                                    }`}
+                                    title={`Bad joke${titleHint}`}
+                                  >▼</button>
+                                </span>
+                              );
+                            })}
                           </span>
                         )}
                       </div>

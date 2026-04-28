@@ -587,3 +587,128 @@ describe("ComedianBrain._classifyConfirmResponse", () => {
     expect(ComedianBrain._classifyConfirmResponse("my name is Taylor")).toBe("restate");
   });
 });
+
+// ─── Filler picking (echo gated on full answer) ─────────────────────────────
+
+describe("ComedianBrain — filler echo gating", () => {
+  /** Drive through to entering `generating`. Returns the first queueSpeak call after entry. */
+  async function captureFillerForAnswer(answer: string, randomValue: number): Promise<string> {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToWaitAnswer(brain);
+    (deps.queueSpeak as ReturnType<typeof vi.fn>).mockClear();
+
+    // Force the random branch deterministically.
+    vi.spyOn(Math, "random").mockReturnValue(randomValue);
+
+    brain.onInputTranscription(answer, true);
+    vi.advanceTimersByTime(1600);
+    await vi.runAllTimersAsync();
+
+    // First queueSpeak after answer-complete is the filler.
+    const calls = (deps.queueSpeak as ReturnType<typeof vi.fn>).mock.calls;
+    return (calls[0]?.[0] as string) ?? "";
+  }
+
+  it("echoes a complete short name (random=0 forces echo branch)", async () => {
+    const filler = await captureFillerForAnswer("Tyler", 0);
+    // Echo template inserts "Tyler" verbatim — must contain it.
+    expect(filler.toLowerCase()).toContain("tyler");
+  });
+
+  it("uses non-word filler when random=0.99 forces non-echo branch", async () => {
+    const filler = await captureFillerForAnswer("Tyler", 0.99);
+    // Non-word fillers don't contain the answer text.
+    expect(filler.toLowerCase()).not.toContain("tyler");
+    expect(filler).toMatch(/^(Mmm|Hm|Uh huh|Hmm|Mmhmm|Ohhh|Huh)\.?$/);
+  });
+
+  it("does not echo a dangling half-sentence even when random=0", async () => {
+    // "I'm a software engineer at" ends with a preposition — should not echo.
+    const filler = await captureFillerForAnswer("I'm a software engineer at", 0);
+    expect(filler.toLowerCase()).not.toContain("software engineer at");
+  });
+
+  it("echoes a sentence-terminated answer even though it's longer (random=0)", async () => {
+    // 4 words and ends in period → still echo-eligible.
+    const filler = await captureFillerForAnswer("I work at a bakery.", 0);
+    // Echo template wraps the answer text — must contain part of it.
+    expect(filler.toLowerCase()).toContain("bakery");
+  });
+});
+
+// ─── Interruptible delivering (barge-in to correct mishearings) ─────────────
+
+describe("ComedianBrain — barge-in during delivering", () => {
+  /** Drive brain through to delivering state. */
+  async function driveToDelivering(brain: ComedianBrain): Promise<void> {
+    await driveToWaitAnswer(brain);
+    brain.onInputTranscription("My name is Alex", true);
+    vi.advanceTimersByTime(1600);
+    await vi.runAllTimersAsync();
+    // After joke generation resolves, brain transitions to delivering.
+  }
+
+  it("substantive speech during delivering cancels TTS and restarts", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToDelivering(brain);
+
+    (deps.cancelSpeech as ReturnType<typeof vi.fn>).mockClear();
+    (deps.setBrainState as ReturnType<typeof vi.fn>).mockClear();
+
+    brain.onInputTranscription("No my name is actually Aleks not Alex", true);
+
+    expect(deps.cancelSpeech).toHaveBeenCalled();
+    const states = getStates(deps);
+    expect(states).toContain("pre_generate");
+  });
+
+  it("laughter during delivering does NOT cancel TTS", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToDelivering(brain);
+
+    (deps.cancelSpeech as ReturnType<typeof vi.fn>).mockClear();
+
+    brain.onInputTranscription("haha", true);
+
+    expect(deps.cancelSpeech).not.toHaveBeenCalled();
+  });
+
+  it("tiny acknowledgments during delivering do NOT cancel TTS", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToDelivering(brain);
+
+    (deps.cancelSpeech as ReturnType<typeof vi.fn>).mockClear();
+
+    brain.onInputTranscription("yeah", true);
+    brain.onInputTranscription("wow", true);
+    brain.onInputTranscription("oh", true);
+
+    expect(deps.cancelSpeech).not.toHaveBeenCalled();
+  });
+
+  it("explicit correction cue interrupts even at 2 words", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", mockFetchResponse(DEFAULT_JOKE_RESPONSE));
+    const deps = makeDeps();
+    const brain = new ComedianBrain(deps);
+    await driveToDelivering(brain);
+
+    (deps.cancelSpeech as ReturnType<typeof vi.fn>).mockClear();
+
+    brain.onInputTranscription("no Aleks", true);
+
+    expect(deps.cancelSpeech).toHaveBeenCalled();
+  });
+});
