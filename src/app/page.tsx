@@ -23,11 +23,19 @@ import RigEditMode from "@/engine/ui/RigEditMode";
 import { useRigEditStore } from "@/engine/store/RigEditStore";
 
 interface DebugUsageSnapshot {
-  calls: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  estimatedCostUsd: number;
+  llm: {
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+  };
+  tts: {
+    calls: number;
+    characters: number;
+    estimatedCostUsd: number;
+  };
+  totalEstimatedCostUsd: number;
 }
 
 function formatCompactNumber(value: number): string {
@@ -566,12 +574,21 @@ function MainApp() {
             <div className="bg-black/80 border border-emerald-400/40 rounded p-2 font-mono text-[10px] leading-tight pointer-events-auto">
               <div>
                 <span className="text-emerald-400">LLM </span>
-                <span className="text-white/70">{llmUsage.calls} calls</span>
+                <span className="text-white/70">{llmUsage.llm.calls} calls</span>
                 <span className="text-white/30"> Â· </span>
-                <span className="text-emerald-200">{formatDebugCost(llmUsage.estimatedCostUsd)} est</span>
+                <span className="text-emerald-200">{formatDebugCost(llmUsage.llm.estimatedCostUsd)} est</span>
               </div>
               <div className="text-white/35">
-                {formatCompactNumber(llmUsage.inputTokens)} in / {formatCompactNumber(llmUsage.outputTokens)} out
+                {formatCompactNumber(llmUsage.llm.inputTokens)} in / {formatCompactNumber(llmUsage.llm.outputTokens)} out
+              </div>
+              <div className="mt-1">
+                <span className="text-sky-300">TTS </span>
+                <span className="text-white/70">{llmUsage.tts.calls} calls</span>
+                <span className="text-white/30"> Â· </span>
+                <span className="text-sky-100">{formatDebugCost(llmUsage.tts.estimatedCostUsd)} est</span>
+              </div>
+              <div className="text-white/35">
+                {formatCompactNumber(llmUsage.tts.characters)} chars · total {formatDebugCost(llmUsage.totalEstimatedCostUsd)}
               </div>
             </div>
           )}

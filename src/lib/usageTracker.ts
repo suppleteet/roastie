@@ -22,7 +22,31 @@ export interface LlmUsageSnapshot {
   recent: LlmUsageEntry[];
 }
 
-const usageEntries: LlmUsageEntry[] = [];
+export interface TtsUsageEntry {
+  id: string;
+  ts: number;
+  route: string;
+  provider: "elevenlabs";
+  model: string;
+  characters: number;
+  estimatedCostUsd: number;
+}
+
+export interface TtsUsageSnapshot {
+  calls: number;
+  characters: number;
+  estimatedCostUsd: number;
+  recent: TtsUsageEntry[];
+}
+
+export interface UsageSnapshot {
+  llm: LlmUsageSnapshot;
+  tts: TtsUsageSnapshot;
+  totalEstimatedCostUsd: number;
+}
+
+const llmUsageEntries: LlmUsageEntry[] = [];
+const ttsUsageEntries: TtsUsageEntry[] = [];
 
 const MODEL_PRICE_PER_MILLION: Record<string, { input: number; output: number }> = {
   "gemini-2.5-flash": { input: 0.3, output: 2.5 },
@@ -30,6 +54,9 @@ const MODEL_PRICE_PER_MILLION: Record<string, { input: number; output: number }>
   "claude-sonnet-4-6": { input: 3, output: 15 },
   "claude-haiku-4-5-20251001": { input: 1, output: 5 },
 };
+
+const ELEVENLABS_ESTIMATED_COST_PER_1K_CHARS =
+  Number(process.env.ELEVENLABS_ESTIMATED_COST_PER_1K_CHARS ?? "0.30");
 
 function priceForModel(model: string): { input: number; output: number } {
   if (MODEL_PRICE_PER_MILLION[model]) return MODEL_PRICE_PER_MILLION[model];
@@ -57,6 +84,10 @@ export function estimateCostUsd(model: string, inputTokens: number, outputTokens
   return (inputTokens * price.input + outputTokens * price.output) / 1_000_000;
 }
 
+export function estimateTtsCostUsd(characters: number): number {
+  return (Math.max(0, characters) / 1000) * ELEVENLABS_ESTIMATED_COST_PER_1K_CHARS;
+}
+
 export function recordLlmUsage(input: {
   route: string;
   provider: LlmProvider;
@@ -79,13 +110,33 @@ export function recordLlmUsage(input: {
     estimatedCostUsd: estimateCostUsd(input.model, inputTokens, outputTokens),
     exact: input.exact,
   };
-  usageEntries.push(entry);
-  usageEntries.splice(0, Math.max(0, usageEntries.length - 250));
+  llmUsageEntries.push(entry);
+  llmUsageEntries.splice(0, Math.max(0, llmUsageEntries.length - 250));
+  return entry;
+}
+
+export function recordTtsUsage(input: {
+  route: string;
+  model?: string;
+  characters: number;
+}): TtsUsageEntry {
+  const characters = Math.max(0, Math.round(input.characters));
+  const entry: TtsUsageEntry = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    ts: Date.now(),
+    route: input.route,
+    provider: "elevenlabs",
+    model: input.model ?? "eleven_turbo_v2_5",
+    characters,
+    estimatedCostUsd: estimateTtsCostUsd(characters),
+  };
+  ttsUsageEntries.push(entry);
+  ttsUsageEntries.splice(0, Math.max(0, ttsUsageEntries.length - 250));
   return entry;
 }
 
 export function getLlmUsageSnapshot(): LlmUsageSnapshot {
-  const totals = usageEntries.reduce(
+  const totals = llmUsageEntries.reduce(
     (acc, entry) => ({
       calls: acc.calls + 1,
       inputTokens: acc.inputTokens + entry.inputTokens,
@@ -97,10 +148,36 @@ export function getLlmUsageSnapshot(): LlmUsageSnapshot {
   );
   return {
     ...totals,
-    recent: usageEntries.slice(-10).reverse(),
+    recent: llmUsageEntries.slice(-10).reverse(),
+  };
+}
+
+export function getTtsUsageSnapshot(): TtsUsageSnapshot {
+  const totals = ttsUsageEntries.reduce(
+    (acc, entry) => ({
+      calls: acc.calls + 1,
+      characters: acc.characters + entry.characters,
+      estimatedCostUsd: acc.estimatedCostUsd + entry.estimatedCostUsd,
+    }),
+    { calls: 0, characters: 0, estimatedCostUsd: 0 },
+  );
+  return {
+    ...totals,
+    recent: ttsUsageEntries.slice(-10).reverse(),
+  };
+}
+
+export function getUsageSnapshot(): UsageSnapshot {
+  const llm = getLlmUsageSnapshot();
+  const tts = getTtsUsageSnapshot();
+  return {
+    llm,
+    tts,
+    totalEstimatedCostUsd: llm.estimatedCostUsd + tts.estimatedCostUsd,
   };
 }
 
 export function resetLlmUsageForTests(): void {
-  usageEntries.length = 0;
+  llmUsageEntries.length = 0;
+  ttsUsageEntries.length = 0;
 }

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { streamElTts, type ElVoiceSettings } from "@/lib/elTtsStream";
+import { recordTtsUsage } from "@/lib/usageTracker";
 
 /**
  * Streaming TTS endpoint using ElevenLabs WebSocket.
@@ -40,6 +41,11 @@ export async function POST(req: NextRequest) {
           );
         },
         onDone: () => {
+          recordTtsUsage({
+            route: "tts-ws",
+            model: "eleven_turbo_v2_5",
+            characters: body.text!.length,
+          });
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`),
           );

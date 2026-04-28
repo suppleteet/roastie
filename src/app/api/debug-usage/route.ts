@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getLlmUsageSnapshot } from "@/lib/usageTracker";
+import { getUsageSnapshot } from "@/lib/usageTracker";
 
 export async function GET() {
-  return NextResponse.json(getLlmUsageSnapshot());
+  return NextResponse.json(getUsageSnapshot());
 }

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { ELEVENLABS_VOICE_ID } from "@/lib/constants";
+import { recordTtsUsage } from "@/lib/usageTracker";
 
 export async function POST(req: NextRequest) {
   try {
@@ -64,6 +65,11 @@ export async function POST(req: NextRequest) {
 
     // Forward the ElevenLabs request-id so the client can chain continuity
     const elevenLabsRequestId = response.headers.get("request-id");
+    recordTtsUsage({
+      route: "tts-rest",
+      model: "eleven_turbo_v2_5",
+      characters: String(text).length,
+    });
 
     // Stream the audio back directly
     return new Response(response.body, {
