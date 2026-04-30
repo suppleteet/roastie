@@ -106,14 +106,15 @@ function wordCount(text: string): number {
 }
 
 function compactGreetingText(text: string): string {
+  const maxWords = 14;
   const trimmed = text.replace(/\s+/g, " ").trim();
-  if (wordCount(trimmed) <= 24) return trimmed;
+  if (wordCount(trimmed) <= maxWords) return trimmed;
 
   const sentences = trimmed.match(/[^.!?]+[.!?]+/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
   const preferred = sentences.at(-1) ?? trimmed;
   const words = preferred.split(/\s+/).filter(Boolean);
-  if (words.length <= 24) return preferred;
-  return `${words.slice(0, 24).join(" ").replace(/[,.!?;:]+$/, "")}.`;
+  if (words.length <= maxWords) return preferred;
+  return `${words.slice(0, maxWords).join(" ").replace(/[,.!?;:]+$/, "")}.`;
 }
 
 function lastWordToken(text: string): string {
@@ -885,11 +886,13 @@ export class ComedianBrain {
       this.deps.logTiming("brain: greeting generation fired (no prefetch)");
     }
 
-    this.visionJokePrefetch.then((response) => {
-      if (this.state !== "greeting") return;
+    const queueGreeting = (response: JokeResponse | null, source: "prefetch" | "fallback") => {
+      if (this.state !== "greeting" || this.greetingSpeechQueued) return;
       if (!response || response.jokes.length === 0) {
-        this.deps.queueSpeak("Oh, wow. Okay. Let me get a look at you.", "energetic", 0.8);
-        this._addLedger("joke", "Oh, wow. Okay. Let me get a look at you.", []);
+        const fallback = "Alright, I see what we're working with.";
+        if (source === "fallback") this.deps.logTiming("brain: greeting prefetch slow — using short fallback");
+        this.deps.queueSpeak(fallback, "energetic", 0.8);
+        this._addLedger("joke", fallback, []);
       } else {
         const joke = response.jokes[0];
         const text = compactGreetingText(joke.text);
@@ -903,7 +906,10 @@ export class ComedianBrain {
       this.greetingSpeechQueued = true;
       // If drain already fired while we were generating, advance now
       this._maybeAdvanceFromGreeting();
-    });
+    };
+
+    setTimeout(() => queueGreeting(null, "fallback"), 1200);
+    this.visionJokePrefetch.then((response) => queueGreeting(response, "prefetch"));
   }
 
   private _maybeAdvanceFromGreeting(): void {

@@ -526,7 +526,10 @@ export default function LiveSessionController({
 
   // ─── Laugh + smile detection (vision-based) ────────────────────────────────────
 
-  const LAUGH_KEYWORDS = ["laugh", "cracking up", "giggl", "chuckl", "grin", "smirk", "hysterical"];
+  const LAUGH_KEYWORDS = [
+    "laugh", "cracking up", "giggl", "chuckl", "hysterical",
+    "grin", "smirk", "smiling broadly", "broad smile", "big smile", "amused",
+  ];
   const SMILE_KEYWORDS = ["smile", "smiling", "grinning", "beaming", "happy", "amused", "cheerful"];
   const LAUGH_DECAY_MS = 4000;
   const SMILE_DECAY_MS = 4000;
@@ -548,8 +551,6 @@ export default function LiveSessionController({
       store.addConversationEvent("user-laugh");
       if (laughDecayTimerRef.current) clearTimeout(laughDecayTimerRef.current);
       laughDecayTimerRef.current = setTimeout(clearLaughter, LAUGH_DECAY_MS);
-    } else {
-      clearLaughter();
     }
 
     // Smile detection
@@ -561,8 +562,6 @@ export default function LiveSessionController({
       store.setIsUserSmiling(true);
       if (smileDecayTimerRef.current) clearTimeout(smileDecayTimerRef.current);
       smileDecayTimerRef.current = setTimeout(clearSmile, SMILE_DECAY_MS);
-    } else {
-      clearSmile();
     }
 
     // Record this vision frame for smile percentage
@@ -638,8 +637,6 @@ export default function LiveSessionController({
           useSessionStore.getState().setObservations(obs);
           brainRef.current?.onVisionUpdate(obs);
           detectExpression(obs);
-        } else {
-          clearLaughter();
         }
         if (setting) {
           useSessionStore.getState().setVisionSetting(setting);

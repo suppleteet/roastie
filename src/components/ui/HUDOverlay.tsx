@@ -102,7 +102,7 @@ export default function HUDOverlay({ onStartSession, isMock = false }: Props) {
       )}
 
       {/* Laugh detected — fixed top center of page */}
-      {isDev && isRoasting && isConversation && isUserLaughing && (
+      {isRoasting && isConversation && isUserLaughing && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
           <span className="text-xs text-yellow-300 font-bold uppercase tracking-wider animate-pulse">
             LAUGH DETECTED

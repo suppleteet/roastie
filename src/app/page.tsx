@@ -83,6 +83,7 @@ function MainApp() {
   const [mockMode, setMockMode] = useState(false);
   const [llmUsage, setLlmUsage] = useState<DebugUsageSnapshot | null>(null);
   const lastNonZeroUsageRef = useRef<DebugUsageSnapshot | null>(null);
+  const ambientRequestInFlightRef = useRef(false);
   const mockModeRef = useRef(false); // ref so the requesting-permissions effect reads current value
   const pendingMockRestartRef = useRef(false); // set by handleMockToggle to bounce session
   const [visionElapsedSecs, setVisionElapsedSecs] = useState<number | null>(null);
@@ -280,6 +281,8 @@ function MainApp() {
     if (!locOk) return;
     if (!navigator.geolocation) return;
     if (ambientContext?.city && ambientContext.city !== "unknown") return;
+    if (ambientRequestInFlightRef.current) return;
+    ambientRequestInFlightRef.current = true;
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -299,9 +302,13 @@ function MainApp() {
               kickTownFlavorFetch();
             }
           })
-          .catch(() => logTiming("geo: ambient-context fetch failed"));
+          .catch(() => logTiming("geo: ambient-context fetch failed"))
+          .finally(() => { ambientRequestInFlightRef.current = false; });
       },
-      () => logTiming("geo: permission denied or unavailable"),
+      () => {
+        ambientRequestInFlightRef.current = false;
+        logTiming("geo: permission denied or unavailable");
+      },
       { timeout: 10000, maximumAge: 300000 },
     );
   }, [phase, locationConsent]); // eslint-disable-line react-hooks/exhaustive-deps
