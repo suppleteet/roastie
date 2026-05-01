@@ -106,15 +106,15 @@ function wordCount(text: string): number {
 }
 
 function compactGreetingText(text: string): string {
-  const maxWords = 14;
+  const maxWords = 28;
   const trimmed = text.replace(/\s+/g, " ").trim();
   if (wordCount(trimmed) <= maxWords) return trimmed;
 
   const sentences = trimmed.match(/[^.!?]+[.!?]+/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
-  const preferred = sentences.at(-1) ?? trimmed;
-  const words = preferred.split(/\s+/).filter(Boolean);
-  if (words.length <= maxWords) return preferred;
-  return `${words.slice(0, maxWords).join(" ").replace(/[,.!?;:]+$/, "")}.`;
+  const completeCandidate = sentences.filter((s) => wordCount(s) <= maxWords).at(-1);
+  // Never cut a generated greeting mid-thought. A slightly longer first joke is
+  // better than a line that sounds like TTS stopped in the middle of a setup.
+  return completeCandidate ?? sentences[0] ?? trimmed;
 }
 
 function lastWordToken(text: string): string {
@@ -902,6 +902,7 @@ export class ComedianBrain {
         this.lastJokeMotion = joke.motion as import("@/lib/motionStates").MotionState;
         this.lastJokeIntensity = joke.intensity;
       }
+      this._preQueueNextQuestion();
       this.deps.setMotion("energetic", 0.8);
       this.greetingSpeechQueued = true;
       // If drain already fired while we were generating, advance now
@@ -967,6 +968,8 @@ export class ComedianBrain {
     // Determine which question to ask
     let question: ComedyQuestion | null = null;
     let shouldListenImmediately = false;
+    let spokenQuestionText: string | null = null;
+    let questionWillBeQueuedAsync = false;
 
     if (this.pendingFollowUp && !sameQuestion && this.followUpCount < 1) {
       // Ask generated follow-up (max 1 per topic, then move on)
@@ -985,11 +988,14 @@ export class ComedianBrain {
       };
       this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
       this.deps.queueSpeak(followUpText, this.lastJokeMotion, this.lastJokeIntensity);
+      spokenQuestionText = followUpText;
     } else if (sameQuestion && this.currentQuestion) {
       // Re-ask same question (after redirect)
       this._clearPreQueue();
       this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
-      this.deps.queueSpeak(this._pickQuestionText(this.currentQuestion), this.lastJokeMotion, this.lastJokeIntensity);
+      const text = this._pickQuestionText(this.currentQuestion);
+      this.deps.queueSpeak(text, this.lastJokeMotion, this.lastJokeIntensity);
+      spokenQuestionText = text;
     } else if (this.visionOnlyMode) {
       // Vision-only: no more questions, wait in check_vision for interesting changes
       this._transition("check_vision");
@@ -1010,14 +1016,16 @@ export class ComedianBrain {
       if (rephrased) {
         this.deps.queueSpeak(rephrased, "emphasis", 0.6);
         this.deps.logTiming(`brain: using pre-queued rephrase — "${rephrased.slice(0, 60)}"`);
+        spokenQuestionText = rephrased;
       } else {
         // Rephrase didn't resolve in time — fall back to original with bridge (no second fetch)
         const text = this._pickQuestionText(question);
         if (COMEDIAN_CONFIG.skipScriptedLines) {
           this.deps.queueSpeak(text, "emphasis", 0.6);
+          spokenQuestionText = text;
         } else {
-          const bridge = ComedianBrain.QUESTION_BRIDGES[Math.floor(Math.random() * ComedianBrain.QUESTION_BRIDGES.length)];
-          this.deps.queueSpeak(`${bridge} ${text}`, "emphasis", 0.6);
+          spokenQuestionText = ComedianBrain._questionWithBridge(text);
+          this.deps.queueSpeak(spokenQuestionText, "emphasis", 0.6);
         }
         this.deps.logTiming("brain: pre-queue rephrase not ready — using original");
       }
@@ -1038,6 +1046,7 @@ export class ComedianBrain {
         this.askedQuestionIds.add(question.id);
         this.currentQuestion = question;
         this.bankQuestionsInARow++;
+        questionWillBeQueuedAsync = true;
         this._queueQuestionWithBridge(this._pickQuestionText(this.currentQuestion));
       } else {
         // Generate a contextual question based on what we see + know
@@ -1049,8 +1058,11 @@ export class ComedianBrain {
 
     if (!this.currentQuestion) return;
 
-    this.deps.setCurrentQuestion(this.currentQuestion.question);
-    this._addLedger("question", this.currentQuestion.question, []);
+    if (!questionWillBeQueuedAsync) {
+      const ledgerQuestion = spokenQuestionText ?? this.currentQuestion.question;
+      this.deps.setCurrentQuestion(ledgerQuestion);
+      this._addLedger("question", ledgerQuestion, []);
+    }
     if (shouldListenImmediately) {
       this.enterWaitAnswer();
     }
@@ -1845,6 +1857,17 @@ export class ComedianBrain {
     "So.", "Now.", "Let me ask you this.", "Okay okay.",
   ];
 
+  private static _questionWithBridge(questionText: string): string {
+    const normalizedQuestion = questionText.replace(/^[\s"'“”]+/, "").toLowerCase();
+    const questionAlreadyHasBridge = ComedianBrain.QUESTION_BRIDGES.some((bridge) => {
+      const bridgeLead = bridge.replace(/[.!?]+$/, "").toLowerCase();
+      return normalizedQuestion.startsWith(bridgeLead);
+    });
+    if (questionAlreadyHasBridge) return questionText;
+    const bridge = ComedianBrain.QUESTION_BRIDGES[Math.floor(Math.random() * ComedianBrain.QUESTION_BRIDGES.length)];
+    return `${bridge} ${questionText}`;
+  }
+
   /** Pick the question text variant — uses vulgarQuestions when contentMode is "vulgar". */
   private _pickQuestionText(q: ComedyQuestion): string {
     if (this.deps.getContentMode() === "vulgar" && q.vulgarQuestions?.length) {
@@ -1854,8 +1877,9 @@ export class ComedianBrain {
   }
 
   /** Queue question with LLM rephrase for natural variation.
-   *  Races rephrase vs ~2.8s timeout — falls back to original + bridge if slow. */
+   *  Races rephrase vs a short timeout — falls back quickly if slow. */
   private _queueQuestionWithBridge(questionText: string): void {
+    questionText = questionText || this.currentQuestion?.question || "What's your name?";
     this.deps.setMotion(this.lastJokeMotion, this.lastJokeIntensity);
 
     // Get the last joke text for rephrase context
@@ -1880,24 +1904,29 @@ export class ComedianBrain {
       .then((d: { rephrased?: string }) => d.rephrased?.trim() || null)
       .catch(() => null);
 
-    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2800));
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 450));
 
     Promise.race([rephrasePromise, timeoutPromise]).then((rephrased) => {
       // Guard: only queue if we're in ask_question (normal path) or the pre-queue is
       // still pending (pipeline path — brain may be in delivering/generating/check_vision).
       // If preQueuedQuestion was cleared (consumed or cancelled), this callback is stale.
       if (this.state !== "ask_question" && !this.preQueuedQuestion) return;
+      let spokenQuestionText: string;
       if (rephrased) {
-        this.deps.queueSpeak(rephrased, "emphasis", 0.6);
+        spokenQuestionText = rephrased;
+        this.deps.queueSpeak(spokenQuestionText, "emphasis", 0.6);
         this.deps.logTiming(`brain: rephrased question — "${rephrased.slice(0, 60)}"`);
       } else if (COMEDIAN_CONFIG.skipScriptedLines) {
-        this.deps.queueSpeak(questionText, "emphasis", 0.6);
+        spokenQuestionText = questionText;
+        this.deps.queueSpeak(spokenQuestionText, "emphasis", 0.6);
         this.deps.logTiming("brain: rephrase timed out — using original (no bridge)");
       } else {
-        const bridge = ComedianBrain.QUESTION_BRIDGES[Math.floor(Math.random() * ComedianBrain.QUESTION_BRIDGES.length)];
-        this.deps.queueSpeak(`${bridge} ${questionText}`, "emphasis", 0.6);
+        spokenQuestionText = ComedianBrain._questionWithBridge(questionText);
+        this.deps.queueSpeak(spokenQuestionText, "emphasis", 0.6);
         this.deps.logTiming("brain: rephrase timed out — using original");
       }
+      this.deps.setCurrentQuestion(spokenQuestionText);
+      this._addLedger("question", spokenQuestionText, []);
     });
   }
 
@@ -1935,8 +1964,6 @@ export class ComedianBrain {
             "I asked you a question.",
           ],
         };
-        this.deps.setCurrentQuestion(questionText);
-        this._addLedger("question", questionText, []);
         this._queueQuestionWithBridge(questionText);
         this.deps.logTiming(`brain: contextual question — "${questionText}"`);
       })
@@ -1950,8 +1977,6 @@ export class ComedianBrain {
           jokeContext: "Location and environment roast.",
           prodLines: ["Hello? Where are you?", "I'm talking to you."],
         };
-        this.deps.setCurrentQuestion(fallback);
-        this._addLedger("question", fallback, []);
         this._queueQuestionWithBridge(fallback);
       });
   }

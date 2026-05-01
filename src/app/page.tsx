@@ -523,7 +523,7 @@ function MainApp() {
       {showPuppet && (
         <div className="relative w-full max-w-[560px] aspect-square">
           {/* Loading overlay — fades out only when the first TTS audio chunk starts. */}
-          <div className={`absolute inset-0 bg-black z-10 pointer-events-none transition-opacity ${isEnding ? "duration-[600ms]" : "duration-[2000ms]"} ${puppetRevealed ? "opacity-0" : "opacity-100"}`}>
+          <div className={`absolute inset-0 bg-black z-10 pointer-events-none transition-opacity ${isEnding ? "duration-[600ms]" : "duration-[500ms]"} ${puppetRevealed ? "opacity-0" : "opacity-100"}`}>
             {phase === "roasting" && !puppetRevealed && (
               <div className="flex items-center justify-center h-full">
                 <div className="flex flex-col items-center gap-3">

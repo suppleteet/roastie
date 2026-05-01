@@ -123,10 +123,12 @@ describe("ComedianBrain", () => {
       expect(stateHistory(deps)).toContain("ask_question");
     });
 
-    it("sets a question", () => {
+    it("sets a question once the queued wording is chosen", async () => {
+      vi.useFakeTimers();
       const deps = makeDeps();
       const brain = new ComedianBrain(deps);
       brain.start();
+      await vi.advanceTimersByTimeAsync(500);
       expect(deps.setCurrentQuestion).toHaveBeenCalled();
       const q = (deps.setCurrentQuestion as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(typeof q).toBe("string");
