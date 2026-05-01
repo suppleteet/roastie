@@ -22,6 +22,7 @@ export function useMicCapture(onChunk: (pcm: Float32Array) => void): MicCaptureH
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const workletRef = useRef<AudioWorkletNode | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const pullGainRef = useRef<GainNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const analyserBuf = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const inputAmplitudeRef = useRef(0);
@@ -49,6 +50,8 @@ export function useMicCapture(onChunk: (pcm: Float32Array) => void): MicCaptureH
 
     sourceRef.current?.disconnect();
     sourceRef.current = null;
+    pullGainRef.current?.disconnect();
+    pullGainRef.current = null;
 
     analyserRef.current?.disconnect();
     analyserRef.current = null;
@@ -105,6 +108,10 @@ export function useMicCapture(onChunk: (pcm: Float32Array) => void): MicCaptureH
 
       const source = ctx.createMediaStreamSource(stream);
       sourceRef.current = source;
+      const pullGain = ctx.createGain();
+      pullGain.gain.value = 0;
+      pullGain.connect(ctx.destination);
+      pullGainRef.current = pullGain;
 
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 512;
@@ -175,6 +182,7 @@ export function useMicCapture(onChunk: (pcm: Float32Array) => void): MicCaptureH
           handlePcmChunk(e.data.pcm);
         };
         source.connect(worklet);
+        worklet.connect(pullGain);
       } catch {
         startScriptProcessor();
       }

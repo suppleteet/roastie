@@ -69,14 +69,12 @@ function MainApp() {
   const logTiming = useSessionStore((s) => s.logTiming);
   const timingLog = useSessionStore((s) => s.timingLog);
   const setSessionStartTs = useSessionStore((s) => s.setSessionStartTs);
-  const observations = useSessionStore((s) => s.observations);
   const timeToFirstSpeechMs = useSessionStore((s) => s.timeToFirstSpeechMs);
   const activePersona = useSessionStore((s) => s.activePersona);
   const setActivePersona = useSessionStore((s) => s.setActivePersona);
   const hasSpokenThisSession = useSessionStore((s) => s.hasSpokenThisSession);
   const puppetRevealed = useSessionStore((s) => s.puppetRevealed);
   const isEnding = useSessionStore((s) => s.isEnding);
-  const lastVisionCallTs = useSessionStore((s) => s.lastVisionCallTs);
   const brainState = useSessionStore((s) => s.brainState);
   const IS_DEV = process.env.NODE_ENV !== "production";
   const [debugMode, setDebugMode] = useState(IS_DEV);
@@ -86,7 +84,6 @@ function MainApp() {
   const ambientRequestInFlightRef = useRef(false);
   const mockModeRef = useRef(false); // ref so the requesting-permissions effect reads current value
   const pendingMockRestartRef = useRef(false); // set by handleMockToggle to bounce session
-  const [visionElapsedSecs, setVisionElapsedSecs] = useState<number | null>(null);
 
   const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
   // Pre-fetched Live API token — may start on idle (conversation) so connect is faster after permission
@@ -412,15 +409,6 @@ function MainApp() {
     }
   }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Live elapsed-seconds ticker for vision call age
-  useEffect(() => {
-    if (lastVisionCallTs === null) { setVisionElapsedSecs(null); return; }
-    const tick = () => setVisionElapsedSecs(Math.floor((Date.now() - lastVisionCallTs) / 1000));
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [lastVisionCallTs]);
-
   useEffect(() => {
     if (!IS_DEV || !debugMode) return;
     let cancelled = false;
@@ -598,14 +586,6 @@ function MainApp() {
               ))}
             </select>
           </div>
-          {observations.length > 0 && (
-            <div className="bg-black/80 border border-cyan-400/40 rounded p-2 font-mono text-[10px] text-cyan-300 leading-tight pointer-events-auto overflow-y-auto max-h-36">
-              <div className="text-cyan-500 mb-1">👁 vision{visionElapsedSecs !== null ? ` · ${visionElapsedSecs}s ago` : ""}</div>
-              {observations.map((obs, i) => (
-                <div key={i}>· {obs}</div>
-              ))}
-            </div>
-          )}
           {/* Time to first speech */}
           <div className="bg-black/80 border border-orange-400/40 rounded p-2 font-mono text-[10px] leading-tight pointer-events-auto">
             <span className="text-orange-500">TTFS </span>
