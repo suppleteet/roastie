@@ -218,7 +218,7 @@ const initialState = {
   timingLog: [] as string[],
   observations: [] as string[],
   visionSetting: null as string | null,
-  locationConsent: false,
+  locationConsent: true,
   ambientContext: null as AmbientContext | null,
   townFlavorBlurb: null as string | null,
   townFlavorRequested: false,

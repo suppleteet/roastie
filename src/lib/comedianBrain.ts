@@ -1383,9 +1383,9 @@ export class ComedianBrain {
   // Keep these declarative, not question-shaped, so they sound like active listening
   // instead of another prompt.
   private static readonly ECHO_FILLER_TEMPLATES = [
-    "{answer}, uh huh.",
-    "{answer}. Hmm.",
-    "{answer}, okay.",
+    "{answer}, huh.",
+    "{answer}, you say.",
+    "{answer}. Hm.",
   ];
 
   /** Probability of picking an echo filler when the answer is echo-eligible. */

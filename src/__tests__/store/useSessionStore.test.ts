@@ -34,8 +34,8 @@ describe("initial state", () => {
     expect(useSessionStore.getState().observations).toHaveLength(0);
   });
 
-  it("does not opt into location by default", () => {
-    expect(useSessionStore.getState().locationConsent).toBe(false);
+  it("opts into location by default", () => {
+    expect(useSessionStore.getState().locationConsent).toBe(true);
   });
 });
 

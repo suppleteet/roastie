@@ -208,7 +208,7 @@ function MainApp() {
     navigator.mediaDevices
       .getUserMedia({
         video: { width: { ideal: 720 }, height: { ideal: 720 }, facingMode: { ideal: "user" } },
-        audio: false, // audio requested at requesting-permissions (after consent is given)
+        audio: false, // microphone is requested together with camera at start
       })
       .then((stream) => {
         setWebcamStream(stream);
@@ -244,29 +244,68 @@ function MainApp() {
 
     ensureLiveTokenPrefetch();
 
-    // If camera was already granted during consent screen, go straight to warmup.
-    // LiveSessionController owns microphone startup so we don't request mic twice.
-    if (webcamStream) {
+    const liveVideoTracks = webcamStream
+      ?.getVideoTracks()
+      .filter((track) => track.readyState === "live") ?? [];
+    const liveAudioTracks = webcamStream
+      ?.getAudioTracks()
+      .filter((track) => track.readyState === "live") ?? [];
+
+    // If camera + mic were already granted, go straight to warmup.
+    if (webcamStream?.getAudioTracks().some((track) => track.readyState === "live")) {
       startPreRoastGreetingWarmup(webcamStream);
       setPhase("roasting", "PERMISSIONS_GRANTED");
       return;
     }
 
-    // Fallback: camera not yet granted — request video only. The live audio hook
-    // starts mic capture in the background and can gracefully fall back if denied.
+    if (webcamStream && liveVideoTracks.length > 0) {
+      navigator.mediaDevices
+        .getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+          },
+        })
+        .then((audioStream) => {
+          const stream = new MediaStream([
+            ...liveVideoTracks,
+            ...audioStream.getAudioTracks(),
+          ]);
+          setWebcamStream(stream);
+          startPreRoastGreetingWarmup(stream);
+          setPhase("roasting", "PERMISSIONS_GRANTED");
+        })
+        .catch((err) => {
+          console.error("Microphone denied:", err.name, err.message);
+          setError(`Microphone error: ${err.name} — ${err.message}. Please allow microphone access and try again.`);
+          setPhase("idle", "PERMISSIONS_DENIED");
+        });
+      return;
+    }
+
+    // Request camera and microphone together before the session starts. Splitting
+    // this into a later background mic request can leave the live session deaf.
     navigator.mediaDevices
       .getUserMedia({
         video: { width: { ideal: 720 }, height: { ideal: 720 }, facingMode: { ideal: "user" } },
-        audio: false,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
       })
       .then((stream) => {
+        liveAudioTracks.forEach((track) => track.stop());
         setWebcamStream(stream);
         startPreRoastGreetingWarmup(stream);
         setPhase("roasting", "PERMISSIONS_GRANTED");
       })
       .catch((err) => {
-        console.error("Camera denied:", err.name, err.message);
-        setError(`Camera error: ${err.name} — ${err.message}. Please allow camera access and try again.`);
+        console.error("Camera/microphone denied:", err.name, err.message);
+        setError(`Camera/microphone error: ${err.name} — ${err.message}. Please allow both camera and microphone access and try again.`);
         setPhase("idle", "PERMISSIONS_DENIED");
       });
   }, [phase, sessionMode, webcamStream, setPhase, setError]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -483,6 +522,7 @@ function MainApp() {
           webcamRef={webcamRef}
           videoRecorderRef={videoRecorderRef}
           compositorStream={compositorHandle.current.stream}
+          mediaStream={webcamStream}
           prefetchedTokenPromise={tokenPromiseRef.current}
           warmupGreetingPrefetch={warmupGreetingPromiseRef.current}
           mockMode={mockMode}

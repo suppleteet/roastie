@@ -148,7 +148,7 @@ export default function ShareScreen() {
   const buttonsDisabled = converting || !shareBlob;
 
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center bg-[radial-gradient(circle_at_top,rgba(234,88,12,0.22),transparent_34%),linear-gradient(160deg,#090301,#000)] px-6 text-center text-white">
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-black px-6 text-center text-white">
       <div className="relative mb-6 w-full max-w-sm">
         {IS_DEV && (
           <button

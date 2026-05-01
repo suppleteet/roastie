@@ -634,7 +634,7 @@ describe("ComedianBrain — filler echo gating", () => {
   it("still echoes a complete answer when random=0.99", async () => {
     const filler = await captureFillerForAnswer("Tyler", 0.99);
     expect(filler.toLowerCase()).toContain("tyler");
-    expect(filler).toMatch(/^(Tyler, uh huh\.|Tyler\. Hmm\.|Tyler, okay\.)$/);
+    expect(filler).toMatch(/^(Tyler, huh\.|Tyler, you say\.|Tyler\. Hm\.)$/);
   });
 
   it("does not echo a dangling half-sentence even when random=0", async () => {
@@ -659,7 +659,7 @@ describe("ComedianBrain — filler echo gating", () => {
       brain._removeEchoedAnswerLead(
         "Gerard. Nobody under sixty has that name by accident.",
         "Gerard.",
-        "Gerard, uh huh.",
+        "Gerard, huh.",
       ),
     ).toBe("Nobody under sixty has that name by accident.");
   });

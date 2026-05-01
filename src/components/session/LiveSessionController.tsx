@@ -31,6 +31,7 @@ interface Props {
   webcamRef: React.RefObject<WebcamCaptureHandle | null>;
   videoRecorderRef: React.RefObject<VideoRecorderHandle | null>;
   compositorStream: MediaStream | null;
+  mediaStream?: MediaStream | null;
   prefetchedTokenPromise?: Promise<string> | null;
   /** Parallel vision + greeting jokes started in page.tsx as soon as the camera stream exists (before roasting). */
   warmupGreetingPrefetch?: Promise<JokeResponse | null> | null;
@@ -69,6 +70,7 @@ export default function LiveSessionController({
   webcamRef,
   videoRecorderRef,
   compositorStream,
+  mediaStream,
   prefetchedTokenPromise,
   warmupGreetingPrefetch,
   mockMode = false,
@@ -937,8 +939,9 @@ export default function LiveSessionController({
     const connectSpanId = useSessionStore.getState().beginSpan("session", "connect");
     try {
       const sessionPromise = openSession(prefetchedTokenPromise);
-      const micPromise = mic.start().catch((e) => {
+      const micPromise = mic.start(mediaStream).catch((e) => {
         console.warn("[live] mic start failed:", e);
+        useSessionStore.getState().logTiming(`live: mic failed — ${(e as Error).name || "unknown"}`);
         brainRef.current?.setMicAvailable(false);
       });
 
