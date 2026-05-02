@@ -433,6 +433,11 @@ export default function LiveSessionController({
       httpOptions: { apiVersion: "v1alpha" },
     });
 
+    // Mutable handler boxes: we need the session reference inside onclose to
+    // tell expected closes (rotation/stop) from unexpected ones, but the
+    // session doesn't exist until ai.live.connect resolves. Set after.
+    const onCloseRef: { run: () => void } = { run: () => {} };
+
     const session = await ai.live.connect({
       model: LIVE_MODEL,
       config: {
@@ -455,12 +460,20 @@ export default function LiveSessionController({
           console.error("[live] WebSocket error:", msg);
           useSessionStore.getState().logTiming(`live: error — ${msg}`);
         },
-        onclose: () => {
-          useSessionStore.getState().logTiming("live: session closed");
-          useSessionStore.getState().setIsListening(false);
-        },
+        onclose: () => onCloseRef.run(),
       },
     });
+
+    onCloseRef.run = () => {
+      useSessionStore.getState().logTiming("live: session closed");
+      useSessionStore.getState().setIsListening(false);
+      // If the still-active session is THIS one, the close was unexpected
+      // (server-initiated drop). Rotation swaps sessionRef BEFORE closing the
+      // old session, so legitimate rotation/stop closes won't match here.
+      if (sessionRef.current === session) {
+        reconnectAfterUnexpectedClose();
+      }
+    };
 
     return session;
   }
@@ -695,8 +708,17 @@ export default function LiveSessionController({
 
   // ─── Session rotation ─────────────────────────────────────────────────────────
 
+  // Guards against re-entrant rotation (e.g., a rotation triggered by an
+  // unexpected onclose firing while another rotation is already in flight).
+  const rotatingRef = useRef(false);
+  // Tracks unexpected reconnects to avoid storming Gemini if its server keeps
+  // dropping us. After this many failures in a 30s window, give up.
+  const reconnectAttemptsRef = useRef<number[]>([]);
+
   async function rotateSession() {
     if (!isRunningRef.current) return;
+    if (rotatingRef.current) return;
+    rotatingRef.current = true;
     useSessionStore.getState().logTiming("live: rotating session");
     useSessionStore.getState().addConversationEvent("rotate");
     const rotateSpanId = useSessionStore.getState().beginSpan("session", "rotate");
@@ -716,7 +738,30 @@ export default function LiveSessionController({
       console.error("[live] Rotation failed:", err);
       useSessionStore.getState().logTiming(`live: rotation error — ${(err as Error).message}`);
       useSessionStore.getState().endSpan(rotateSpanId);
+    } finally {
+      rotatingRef.current = false;
     }
+  }
+
+  /** Triggered by Gemini Live's onclose when the close was unexpected. */
+  function reconnectAfterUnexpectedClose() {
+    if (!isRunningRef.current || rotatingRef.current) return;
+    const now = Date.now();
+    reconnectAttemptsRef.current = reconnectAttemptsRef.current.filter((t) => now - t < 30_000);
+    reconnectAttemptsRef.current.push(now);
+    if (reconnectAttemptsRef.current.length > 4) {
+      useSessionStore.getState().logTiming(
+        `live: too many reconnects (${reconnectAttemptsRef.current.length} in 30s) — giving up`,
+      );
+      useSessionStore.getState().setError(
+        "Connection to Gemini keeps dropping. Stop and try again.",
+      );
+      return;
+    }
+    useSessionStore.getState().logTiming(
+      `live: unexpected close — reconnecting (attempt ${reconnectAttemptsRef.current.length})`,
+    );
+    void rotateSession();
   }
 
   function scheduleRotation() {

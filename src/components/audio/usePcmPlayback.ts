@@ -89,15 +89,22 @@ export function usePcmPlayback(): PcmPlaybackHandle {
       analyser.connect(speakerDest);
       analyser.connect(dest);
 
+      // Append to DOM and configure for inline media playback. Without DOM
+      // attachment + playsInline + autoplay, Android Chrome takes one extra
+      // session start to lock onto the media channel — first roast plays
+      // through the earpiece (volume slider does nothing) and the audio also
+      // sounds chipmunked while routing settles. Subsequent roasts work
+      // because the element from the first attempt is still alive.
       const audioEl = document.createElement("audio");
+      audioEl.autoplay = true;
+      audioEl.setAttribute("playsinline", "");
+      audioEl.muted = false;
+      audioEl.controls = false;
+      audioEl.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;";
+      audioEl.setAttribute("aria-hidden", "true");
+      document.body.appendChild(audioEl);
       audioEl.srcObject = speakerDest.stream;
-      // Force speaker output (not earpiece) on devices that support setSinkId
-      if ("setSinkId" in audioEl) {
-        (audioEl as HTMLAudioElement & { setSinkId(id: string): Promise<void> })
-          .setSinkId("")
-          .catch(() => {});
-      }
-      audioEl.play().catch(() => {});
+      audioEl.play().catch((e) => console.warn("[playback] audioEl.play failed:", e));
       audioElRef.current = audioEl;
     }
     return ctx;
@@ -191,6 +198,7 @@ export function usePcmPlayback(): PcmPlaybackHandle {
       if (audioElRef.current) {
         audioElRef.current.pause();
         audioElRef.current.srcObject = null;
+        audioElRef.current.remove();
         audioElRef.current = null;
       }
       if (ctxRef.current?.state !== "closed") {
