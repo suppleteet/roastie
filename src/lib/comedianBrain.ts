@@ -738,6 +738,54 @@ export class ComedianBrain {
     };
   }
 
+  /**
+   * Decide whether a follow-up question is "smart" enough to ask, or whether
+   * we should drop it and change topics. The LLM prompt asks it to omit weak
+   * follow-ups, but it routinely ignores that — every gate here exists because
+   * a real session showed the LLM violating the rule.
+   *
+   * Reject when:
+   *   - The follow-up is A/B / multiple-choice / either-or
+   *   - The previous answer was too thin to dig into (< 3 words)
+   *   - The previous question was already a short canonical (name/age/single)
+   *   - The follow-up is just a rephrase of the same topic ("so what kind of X?")
+   */
+  private _isSmartFollowUp(followUp: string, answer: string): boolean {
+    const fu = followUp.trim();
+    if (!fu) return false;
+    const fuLower = fu.toLowerCase();
+
+    // A/B and either-or formats
+    if (/\bor\s+(?:not\s+)?[a-z]+[.?\s]*\?\s*$/i.test(fu)) return false;
+    if (/\bwould you rather\b/i.test(fuLower)) return false;
+    if (/\beither\b[^.?!]*\bor\b/i.test(fuLower)) return false;
+    // "Are you a morning person or a night owl?" — flag any "or" sandwiched between commas/words ending in ?
+    if (/[a-z]\s+or\s+[a-z][^?]*\?/i.test(fuLower)) return false;
+
+    // Previous answer too thin
+    const ans = answer.trim();
+    const wc = ans ? ans.split(/\s+/).filter(Boolean).length : 0;
+    if (wc < 3) return false;
+
+    // Canonical-short-answer topics — name/age don't unlock more by digging
+    const qId = this.currentQuestion?.id ?? "";
+    if (qId === "name" || qId === "age" || qId === "single") return false;
+
+    // Rephrase-of-same-topic check: if the follow-up shares meaningful nouns
+    // with the just-asked question, it's probably "so what kind of [same thing]?".
+    const lastQuestionText = (this.currentQuestion?.question ?? "").toLowerCase();
+    if (lastQuestionText) {
+      const nouns = (lastQuestionText.match(/\b[a-z]{4,}\b/g) ?? []).filter(
+        (w) => !["what", "your", "you", "have", "with", "that", "this", "they", "would", "about", "going"].includes(w),
+      );
+      const fuNouns = new Set((fuLower.match(/\b[a-z]{4,}\b/g) ?? []));
+      const overlap = nouns.filter((n) => fuNouns.has(n)).length;
+      if (overlap >= 2) return false;
+    }
+
+    return true;
+  }
+
   /** Normalize for substring match between STT and recent puppet lines. */
   private static _normalizeForEchoMatch(text: string): string {
     return text
@@ -1004,6 +1052,12 @@ export class ComedianBrain {
       this.enterWrapup();
       return;
     }
+    // Snapshot the previous answer BEFORE clearing the buffer — the smart
+    // follow-up gate needs it to judge whether the user gave us enough to
+    // dig into.
+    const previousAnswer =
+      this.answerBuffer.trim() ||
+      (this.ledger.filter((e) => e.type === "answer").at(-1)?.text ?? "");
     this._transition("ask_question");
     this.answerBuffer = "";
     this.earlyListenActivated = false;
@@ -1017,14 +1071,23 @@ export class ComedianBrain {
     let spokenQuestionText: string | null = null;
     let questionWillBeQueuedAsync = false;
 
-    // Follow-up questions disabled: when the puppet's joke ends with an
-    // open follow-up like "are you a or b?", it locks the topic in place.
-    // Half the time there's no funny answer to the follow-up, so the show
-    // stalls on a weak premise. Better to always change topics — pull the
-    // next bank question or generate a contextual one. Keeping the field
-    // populated for future debugging, just gating it shut here.
-    const FOLLOW_UPS_ENABLED = false;
-    if (FOLLOW_UPS_ENABLED && this.pendingFollowUp && !sameQuestion && this.followUpCount < 1) {
+    // Follow-ups are gated by _isSmartFollowUp — see helper for criteria.
+    // The LLM is told to omit follow-ups by default; this is the second line
+    // of defense for cases where it ignores the prompt and emits an A/B or
+    // a thin "tell me more" filler. When the gate rejects, drop the follow-up
+    // on the floor so it doesn't haunt the next ask_question.
+    let useFollowUp = false;
+    if (this.pendingFollowUp && !sameQuestion && this.followUpCount < 1) {
+      if (this._isSmartFollowUp(this.pendingFollowUp, previousAnswer)) {
+        useFollowUp = true;
+      } else {
+        this.deps.logTiming(
+          `brain: dropped follow-up (failed smart-gate) — "${this.pendingFollowUp.slice(0, 40)}"`,
+        );
+        this.pendingFollowUp = null;
+      }
+    }
+    if (useFollowUp && this.pendingFollowUp) {
       // Ask generated follow-up (max 1 per topic, then move on)
       const followUpText = this.pendingFollowUp;
       this.pendingFollowUp = null;
@@ -2082,10 +2145,29 @@ export class ComedianBrain {
     if (this.visionOnlyMode) return;
     if (this.preQueuedQuestion) return;
 
-    // Follow-up pre-queue disabled — see enterAskQuestion for rationale.
-    // Always pull the next bank question or generate a contextual one instead.
+    // Follow-up wins — but only if it passes the smart-gate (see _isSmartFollowUp).
+    // Otherwise drop it on the floor and let the bank/contextual path take over.
     if (this.pendingFollowUp) {
+      const followUpText = this.pendingFollowUp;
       this.pendingFollowUp = null;
+      const lastAnswer = this.ledger.filter((e) => e.type === "answer").at(-1)?.text ?? "";
+      if (this._isSmartFollowUp(followUpText, lastAnswer)) {
+        this.followUpCount++;
+        this.preQueuedQuestion = {
+          id: "follow_up",
+          question: followUpText,
+          jokeContext: "Answer-driven follow-up question.",
+          prodLines: [
+            "I'm waiting. The audience is waiting.",
+            "Hello? Anyone home?",
+          ],
+        };
+        this.preQueuedRephrasedText = null;
+        this._fetchRephraseForPreQueue(followUpText);
+        this.deps.logTiming(`brain: pre-queue follow-up — "${followUpText.slice(0, 40)}"`);
+        return;
+      }
+      this.deps.logTiming(`brain: dropped follow-up (failed smart-gate) — "${followUpText.slice(0, 40)}"`);
     }
 
     const shouldUseContextual = this.bankQuestionsInARow >= 1 && this.cameraAvailable;
