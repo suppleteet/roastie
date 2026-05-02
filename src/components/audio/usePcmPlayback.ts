@@ -56,6 +56,11 @@ export function usePcmPlayback(): PcmPlaybackHandle {
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const rafRef = useRef<number>(0);
   const lastAmplitudeRef = useRef<number>(0);
+  // ConstantSourceNode that pumps silence continuously through the analyser →
+  // speaker MediaStream so Android Chrome keeps the audio session classified
+  // as "media" instead of "communication". Without this, the routing lock
+  // released between TTS bursts and call-channel routing took over.
+  const silentSourceRef = useRef<ConstantSourceNode | null>(null);
 
   // Hidden <audio> element routes output through the media channel on Android.
   // Without this, Chrome Android sends Web Audio through the earpiece when
@@ -106,6 +111,18 @@ export function usePcmPlayback(): PcmPlaybackHandle {
       audioEl.srcObject = speakerDest.stream;
       audioEl.play().catch((e) => console.warn("[playback] audioEl.play failed:", e));
       audioElRef.current = audioEl;
+
+      // Continuous silent signal: ConstantSourceNode at 0 keeps the
+      // MediaStream actively producing samples even when no TTS is playing.
+      // Android Chrome only locks the media-channel routing while the stream
+      // is actively pumping data — gaps between TTS chunks would otherwise
+      // let the system fall back to the communication channel (volume buttons
+      // control call volume instead of media, mic uses near-field gain).
+      const silentSource = ctx.createConstantSource();
+      silentSource.offset.value = 0;
+      silentSource.connect(analyser);
+      silentSource.start();
+      silentSourceRef.current = silentSource;
     }
     return ctx;
   }
@@ -195,6 +212,11 @@ export function usePcmPlayback(): PcmPlaybackHandle {
     return () => {
       cancelAnimationFrame(rafRef.current);
       flush();
+      if (silentSourceRef.current) {
+        try { silentSourceRef.current.stop(); } catch { /* already stopped */ }
+        silentSourceRef.current.disconnect();
+        silentSourceRef.current = null;
+      }
       if (audioElRef.current) {
         audioElRef.current.pause();
         audioElRef.current.srcObject = null;
