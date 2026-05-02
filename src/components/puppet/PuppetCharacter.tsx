@@ -127,15 +127,16 @@ function ProceduralHead() {
       {/* ── Nose ── */}
       <Nose />
 
-      {/* ── Eyebrows — thick capsule pills pressed down against the eyes.
-            Capsule default axis is Y, rotate Math.PI/2 around Z to lay
-            them horizontal. Felt finish (rough, no metalness). ── */}
-      <mesh position={[-0.20, 0.78, 0.83]} rotation={[0.9, 0, Math.PI / 2]}>
-        <capsuleGeometry args={[0.105, 0.18, 6, 12]} />
+      {/* ── Eyebrows — thick capsule pills sitting right on top of the
+            eyeballs with a small gap between them. Capsule default axis
+            is Y, rotate Math.PI/2 around Z to lay them horizontal. Felt
+            finish (rough, no metalness). ── */}
+      <mesh position={[-0.22, 0.82, 0.85]} rotation={[0.9, 0, Math.PI / 2]}>
+        <capsuleGeometry args={[0.12, 0.18, 6, 12]} />
         <meshStandardMaterial color={BROW_COLOR} roughness={1.0} metalness={0} />
       </mesh>
-      <mesh position={[0.20, 0.78, 0.83]} rotation={[0.9, 0, Math.PI / 2]}>
-        <capsuleGeometry args={[0.105, 0.18, 6, 12]} />
+      <mesh position={[0.22, 0.82, 0.85]} rotation={[0.9, 0, Math.PI / 2]}>
+        <capsuleGeometry args={[0.12, 0.18, 6, 12]} />
         <meshStandardMaterial color={BROW_COLOR} roughness={1.0} metalness={0} />
       </mesh>
     </MouthHemispheres>
@@ -210,11 +211,13 @@ function MouthHemispheres({ children }: { children?: React.ReactNode }) {
           <circleGeometry args={[R * 0.95, 48]} />
           <meshStandardMaterial color={MOUTH_COLOR} roughness={1.0} metalness={0} side={THREE.DoubleSide} />
         </mesh>
-        {/* Tongue: flattened ellipsoid resting on top of the bottom disc,
-            tilted slightly forward like it's sticking out a touch. */}
-        <mesh position={[0, 0.04, 0.32]} rotation={[-0.25, 0, 0]} scale={[0.55, 0.18, 0.75]}>
-          <sphereGeometry args={[0.32, 28, 24]} />
-          <meshStandardMaterial color={TONGUE_COLOR} roughness={1.0} metalness={0} />
+        {/* Tongue: large, very flat ellipsoid resting on top of the bottom
+            disc, tilted slightly forward. meshLambertMaterial → pure
+            diffuse, no specular lobe at all (matches the felt look of
+            the rest of the head). */}
+        <mesh position={[0, 0.03, 0.30]} rotation={[-0.25, 0, 0]} scale={[0.90, 0.10, 1.05]}>
+          <sphereGeometry args={[0.32, 32, 24]} />
+          <meshLambertMaterial color={TONGUE_COLOR} />
         </mesh>
       </group>
     </>
