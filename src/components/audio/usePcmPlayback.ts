@@ -6,6 +6,22 @@ import { base64Pcm16ToFloat32 } from "@/lib/audioUtils";
 
 const AMPLITUDE_THRESHOLD = 0.01;
 
+/** Linear-interpolate Float32 PCM from one sample rate to another. */
+function resampleLinear(input: Float32Array, fromRate: number, toRate: number): Float32Array {
+  if (fromRate === toRate || input.length === 0) return input;
+  const ratio = fromRate / toRate;
+  const outLen = Math.max(1, Math.round(input.length / ratio));
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const srcIdx = i * ratio;
+    const lo = Math.floor(srcIdx);
+    const hi = Math.min(lo + 1, input.length - 1);
+    const frac = srcIdx - lo;
+    out[i] = input[lo] * (1 - frac) + input[hi] * frac;
+  }
+  return out;
+}
+
 export interface PcmPlaybackHandle {
   enqueueChunk(base64Pcm: string): void;
   /** Decode a raw MP3/AAC ArrayBuffer and schedule it for playback. */
@@ -121,11 +137,21 @@ export function usePcmPlayback(): PcmPlaybackHandle {
     const ctx = getOrCreateContext();
     if (ctx.state === "suspended") ctx.resume();
 
-    const float32 = base64Pcm16ToFloat32(base64Pcm);
-    if (float32.length === 0) return;
+    const raw = base64Pcm16ToFloat32(base64Pcm);
+    if (raw.length === 0) return;
 
-    const buffer = ctx.createBuffer(1, float32.length, OUTPUT_SAMPLE_RATE);
-    buffer.getChannelData(0).set(float32);
+    // Manual resample to ctx.sampleRate. iOS Safari sometimes silently coerces a
+    // 24kHz AudioContext to the device default (48kHz) AND has a startup glitch
+    // where AudioBufferSourceNode plays the first ~500ms at the wrong rate
+    // (chipmunk effect). Resampling here means the buffer always matches the
+    // context rate exactly — no implicit resampler involved.
+    const samples =
+      ctx.sampleRate === OUTPUT_SAMPLE_RATE
+        ? raw
+        : resampleLinear(raw, OUTPUT_SAMPLE_RATE, ctx.sampleRate);
+
+    const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
+    buffer.getChannelData(0).set(samples);
     scheduleBuffer(buffer);
   }, [scheduleBuffer]);
 

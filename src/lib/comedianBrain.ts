@@ -709,6 +709,31 @@ export class ComedianBrain {
     return /^(no|nah|nope|wrong)\b/.test(t) || /\b(i said|that's not|that is not|not that)\b/.test(t);
   }
 
+  /**
+   * Canned roast for when the LLM pipeline returns nothing (typically an
+   * upstream API error — quota, missing key, malformed JSON). Keeps the show
+   * going so the user sees a response instead of dead air + the next question.
+   */
+  private static _pickFallbackRoast(answer: string): {
+    text: string;
+    motion: string;
+    intensity: number;
+  } {
+    const trimmed = answer.trim().replace(/[.?!]+$/, "");
+    const truncated = trimmed.length > 28 ? `${trimmed.slice(0, 28)}…` : trimmed;
+    const templates = [
+      `${truncated}. Yeah. Riveting. Real edge-of-my-seat material there.`,
+      `${truncated}. Stunning. The roast practically writes itself.`,
+      `Right. ${truncated}. Give me a second to recover from how interesting that was.`,
+      `${truncated}. Cool. Cool cool cool. Anyway.`,
+    ];
+    return {
+      text: templates[Math.floor(Math.random() * templates.length)],
+      motion: "smug",
+      intensity: 0.6,
+    };
+  }
+
   /** Normalize for substring match between STT and recent puppet lines. */
   private static _normalizeForEchoMatch(text: string): string {
     return text
@@ -1734,10 +1759,21 @@ export class ComedianBrain {
       queued++;
     }
 
-    // Nothing was queued — advance immediately (don't wait for TTS drain that will never come)
+    // Nothing was queued — typically an upstream LLM failure (missing API key,
+    // quota, malformed JSON). Drop in a canned beat so the puppet doesn't
+    // silently bounce to the next question while the user is waiting for a roast.
+    // Skip the fallback only when the API explicitly flagged the answer irrelevant
+    // (the redirect path above will have already handled or chosen to advance).
     if (queued === 0) {
-      this.deps.logTiming("brain: enterDelivering with nothing to say — advancing");
-      this._onDeliveringDrained();
+      if (response.relevant === false) {
+        this.deps.logTiming("brain: enterDelivering with nothing to say — advancing");
+        this._onDeliveringDrained();
+        return;
+      }
+      const fallback = ComedianBrain._pickFallbackRoast(answer);
+      this.deps.logTiming(`brain: enterDelivering empty — fallback "${fallback.text.slice(0, 60)}"`);
+      this.deps.queueSpeak(fallback.text, fallback.motion as MotionState, fallback.intensity);
+      this._addLedger("joke", fallback.text, []);
       return;
     }
 
