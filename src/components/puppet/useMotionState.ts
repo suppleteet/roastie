@@ -43,8 +43,15 @@ export function useMotionState(targets: React.MutableRefObject<SpringTargets>) {
 
     const cfg = MOTION_STATE_CONFIGS[effectiveState];
 
-    stiffnessRef.current = cfg.stiffness;
-    dampingRef.current = cfg.damping;
+    // Tighten the head spring across awake states so it doesn't float —
+    // higher stiffness (snappier toward target) and lower damping (less
+    // sluggish). Sleeping is left alone because the slow oscillation is
+    // intentional there.
+    const isSleeping = effectiveState === "sleeping";
+    const stiffMul = isSleeping ? 1.0 : 1.45;
+    const dampMul = isSleeping ? 1.0 : 0.75;
+    stiffnessRef.current = cfg.stiffness * stiffMul;
+    dampingRef.current = cfg.damping * dampMul;
 
     // Idle breathing oscillation (always present, subtle)
     const breathe = Math.sin(t * cfg.oscFreq * Math.PI * 2) * cfg.oscAmp;
